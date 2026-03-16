@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 
 interface TaintSource {
   id: number;
@@ -118,6 +119,8 @@ export default function TaintConfigDialog({
   const [startSeq, setStartSeq] = useState("1");
   const [endSeq, setEndSeq] = useState(String(seq + 1));
   const [controlDep, setControlDep] = useState(true);
+  const [controlTip, setControlTip] = useState<{ x: number; y: number } | null>(null);
+  const controlTipTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sources, setSources] = useState<TaintSource[]>(() =>
     createDefaultSources(nextIdRef, defaultDefs, defaultMemAddr)
   );
@@ -184,6 +187,7 @@ export default function TaintConfigDialog({
   }, [onClose, handleExecute]);
 
   return (
+    <>
     <div
       style={{
         position: "fixed",
@@ -255,11 +259,17 @@ export default function TaintConfigDialog({
           <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)", flexShrink: 0 }}>
             Dependencies
           </div>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, color: "var(--text-primary)" }}>
-            <input type="checkbox" checked disabled style={{ accentColor: "var(--btn-primary)" }} />
-            Data
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, color: "var(--text-primary)" }}>
+          <label
+            style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, color: "var(--text-primary)" }}
+            onMouseEnter={(e) => {
+              const mx = e.clientX, my = e.clientY;
+              controlTipTimer.current = setTimeout(() => setControlTip({ x: mx, y: my + 16 }), 100);
+            }}
+            onMouseLeave={() => {
+              if (controlTipTimer.current) { clearTimeout(controlTipTimer.current); controlTipTimer.current = null; }
+              setControlTip(null);
+            }}
+          >
             <input
               type="checkbox"
               checked={controlDep}
@@ -411,5 +421,19 @@ export default function TaintConfigDialog({
         </div>
       </div>
     </div>
+    {controlTip && createPortal(
+      <div style={{
+        position: "fixed", left: controlTip.x, top: controlTip.y,
+        background: "var(--bg-dialog)", color: "var(--text-primary)",
+        border: "1px solid var(--border-color)", borderRadius: 4,
+        padding: "4px 8px", fontSize: 11, maxWidth: 320, lineHeight: 1.5,
+        pointerEvents: "none", zIndex: 10002,
+        boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+      }}>
+        When enabled, taint propagates through control-flow dependencies (e.g. conditional branches), not just data-flow. This may increase the number of tainted instructions.
+      </div>,
+      document.body,
+    )}
+    </>
   );
 }

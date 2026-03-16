@@ -91,6 +91,7 @@ interface Props {
   sliceActive?: boolean;
   getSliceStatus?: (startSeq: number, count: number) => Promise<boolean[]>;
   onTaintRequest?: (seq: number, register?: string) => void;
+  onRegSelected?: (info: { seq: number; regName: string } | null) => void;
   sliceFilterMode?: "highlight" | "filter-only";
   taintedSeqs?: number[];
   sliceSourceSeq?: number;
@@ -143,6 +144,7 @@ export default function TraceTable({
   sliceActive = false,
   getSliceStatus,
   onTaintRequest,
+  onRegSelected,
   sliceFilterMode = "highlight",
   taintedSeqs,
   sliceSourceSeq,
@@ -673,6 +675,11 @@ export default function TraceTable({
     }
   }, [sessionId, arrowState]);
 
+  // 通知外部寄存器选中状态变化
+  useEffect(() => {
+    onRegSelected?.(arrowState ? { seq: arrowState.anchorSeq, regName: arrowState.regName } : null);
+  }, [arrowState, onRegSelected]);
+
   // 切换 session 或文件时清除箭头
   useEffect(() => { setArrowState(null); }, [sessionId]);
 
@@ -946,6 +953,7 @@ export default function TraceTable({
     // 7. 默认：选中行
     isInternalClick.current = true;
     onSelectSeq(resolved.seq);
+    if (arrowState) setArrowState(null);
     setCtrlSelect(prev => prev.size > 0 ? new Set() : prev);
     shiftAnchorVi.current = vi;
   }, [finalVirtualTotalRows, finalResolveVirtualIndex, finalSeqToVirtualIndex, animatedToggleFold, blLineMap,

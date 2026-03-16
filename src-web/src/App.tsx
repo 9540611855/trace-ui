@@ -21,6 +21,7 @@ import { selectedSeqStore, useSelectedSeq } from "./stores/selectedSeqStore";
 import { navigationStore } from "./stores/navigationStore";
 import { isModKey } from "./utils/platform";
 import { useFoldState } from "./hooks/useFoldState";
+import { useFuncRenameStore } from "./hooks/useFuncRenameStore";
 import { usePreferences, saveSessionSnapshot, loadSessionSnapshot } from "./hooks/usePreferences";
 import { useHighlights } from "./hooks/useHighlights";
 import type { SessionSnapshot } from "./hooks/usePreferences";
@@ -83,6 +84,7 @@ function App() {
   const slice = useSliceState(activeSessionId);
   const [taintDialogSeq, setTaintDialogSeq] = useState<number | null>(null);
   const [taintDialogReg, setTaintDialogReg] = useState<string | undefined>(undefined);
+  const [selectedRegInfo, setSelectedRegInfo] = useState<{ seq: number; regName: string } | null>(null);
 
   const [showGoto, setShowGoto] = useState(false);
 
@@ -339,6 +341,8 @@ function App() {
       cached.loadedNodes.add(nodeId);
     }
   }, [activeSessionId]);
+
+  const funcRename = useFuncRenameStore(filePath ?? null);
 
   const foldState = useFoldState(callTreeNodeMap, totalLines);
 
@@ -833,7 +837,15 @@ function App() {
             });
           }
         }}
-        onTaintClear={slice.clearSlice}
+        onTaintClear={() => {
+          const sourceSeq = slice.sliceSourceSeq;
+          slice.clearSlice();
+          if (sourceSeq !== undefined) {
+            scrollAlignRef.current = "center";
+            setScrollTrigger(c => c + 1);
+            navigationStore.navigate(sourceSeq);
+          }
+        }}
         onTaintGoToSource={() => {
           if (slice.sliceSourceSeq !== undefined) {
             scrollAlignRef.current = "end";
@@ -843,12 +855,18 @@ function App() {
         }}
         onTaintReconfigure={() => {
           if (taintDialogSeq === null) {
-            const startLine = slice.sliceStartSeq !== undefined ? slice.sliceStartSeq : 0;
-            setTaintDialogSeq(startLine);
-            setTaintDialogReg(undefined);
+            if (selectedRegInfo) {
+              setTaintDialogSeq(selectedRegInfo.seq);
+              setTaintDialogReg(selectedRegInfo.regName);
+            } else {
+              const startLine = slice.sliceStartSeq !== undefined ? slice.sliceStartSeq : 0;
+              setTaintDialogSeq(startLine);
+              setTaintDialogReg(undefined);
+            }
           }
         }}
         onClearCache={clearRecent}
+        regSelected={selectedRegInfo !== null}
       />
       <Group orientation="horizontal" style={{ flex: 1 }} elementRef={hGroupRef}>
         <Panel defaultSize={20} minSize={15} panelRef={leftPanelRef}>
@@ -864,6 +882,7 @@ function App() {
                 lazyMode={callTreeLazyMode}
                 loadedNodes={callTreeLoadedNodes}
                 onLoadChildren={loadCallTreeChildren}
+                funcRename={funcRename}
               />
             </Panel>
             <Separator style={{ height: 3 }} />
@@ -914,6 +933,7 @@ function App() {
                     sliceActive={slice.sliceActive}
                     getSliceStatus={slice.getSliceStatus}
                     onTaintRequest={(seq, reg) => { setTaintDialogSeq(seq); setTaintDialogReg(reg); }}
+                    onRegSelected={setSelectedRegInfo}
                     sliceFilterMode={slice.sliceFilterMode}
                     taintedSeqs={slice.taintedSeqs}
                     sliceSourceSeq={slice.sliceSourceSeq}

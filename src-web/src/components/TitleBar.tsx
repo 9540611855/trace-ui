@@ -41,9 +41,10 @@ interface Props {
   onTaintGoToSource: () => void;
   onTaintReconfigure: () => void;
   onClearCache?: () => void;
+  regSelected?: boolean;
 }
 
-export default function TitleBar({ onOpenFile, onCloseFile, onRebuildIndex, onSearch, isLoaded, recentFiles, onRemoveRecent, onGoBack, onGoForward, preferences, onUpdatePreferences, onTaintAnalysis, onSaveTaintResults, onHighlight, onStrikethrough, onResetHighlight, onHide, sliceActive, sliceFilterMode, sliceInfo, onTaintFilterModeChange, onTaintClear, onTaintGoToSource, onTaintReconfigure, onClearCache }: Props) {
+export default function TitleBar({ onOpenFile, onCloseFile, onRebuildIndex, onSearch, isLoaded, recentFiles, onRemoveRecent, onGoBack, onGoForward, preferences, onUpdatePreferences, onTaintAnalysis, onSaveTaintResults, onHighlight, onStrikethrough, onResetHighlight, onHide, sliceActive, sliceFilterMode, sliceInfo, onTaintFilterModeChange, onTaintClear, onTaintGoToSource, onTaintReconfigure, onClearCache, regSelected }: Props) {
   const hasSelectedSeq = useHasSelectedSeq();
   const canGoBack = useCanGoBack();
   const canGoForward = useCanGoForward();
@@ -308,9 +309,9 @@ export default function TitleBar({ onOpenFile, onCloseFile, onRebuildIndex, onSe
         <div style={{ flex: 1, minWidth: 0 }} data-tauri-drag-region />
 
         {/* 中间：导航按钮 + 搜索框 */}
-        {/* Taint 菜单（仅在污点分析激活时显示） */}
-        {sliceActive && (
-          <MenuDropdown label="Taint" minWidth={200} labelStyle={{ background: "rgba(80, 200, 120, 0.25)" }}>
+        {/* Taint 按钮/菜单 */}
+        {sliceActive ? (
+          <MenuDropdown label="Taint" minWidth={200} labelStyle={{ background: "#ff9800", color: "#fff" }}>
             <MenuItem
               label="Tainted Only"
               checked={sliceFilterMode === "filter-only"}
@@ -326,6 +327,25 @@ export default function TitleBar({ onOpenFile, onCloseFile, onRebuildIndex, onSe
             <MenuItem label="Re-configure..." onClick={onTaintReconfigure} />
             <MenuSeparator />
             <MenuItem label="Clear" onClick={onTaintClear} />
+          </MenuDropdown>
+        ) : regSelected ? (
+          <button
+            onClick={onTaintReconfigure}
+            style={{
+              padding: "4px 10px",
+              background: "#4caf50",
+              color: "#fff",
+              border: "none",
+              borderRadius: 4,
+              cursor: "pointer",
+              fontSize: "var(--font-size-sm)",
+            }}
+          >
+            Taint
+          </button>
+        ) : (
+          <MenuDropdown label="Taint" minWidth={200}>
+            <MenuItem label="Configure..." onClick={onTaintReconfigure} />
           </MenuDropdown>
         )}
         <button

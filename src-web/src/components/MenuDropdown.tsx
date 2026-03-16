@@ -90,7 +90,7 @@ export function MenuDropdown({ label, children, minWidth = 200, labelStyle }: {
         style={{
           padding: "4px 10px",
           background: btnBackground,
-          color: "var(--text-primary)",
+          color: labelStyle?.color ?? "var(--text-primary)",
           border: "none",
           borderRadius: 4,
           cursor: "pointer",
