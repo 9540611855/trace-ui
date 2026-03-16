@@ -7,6 +7,7 @@ pub mod slicer;
 pub mod call_tree;
 pub mod mem_access;
 pub mod reg_checkpoint;
+pub mod strings;
 
 use memchr::memchr;
 use rustc_hash::FxHashMap;
