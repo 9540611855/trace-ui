@@ -63,13 +63,13 @@ pub fn parse_trace_line_gumtrace(seq: u32, raw: &[u8]) -> Option<TraceLine> {
     let bracket_end = line.find("] ")?;
     let rest = &line[bracket_end + 2..];
 
-    // Address: 0xABS!0xOFFSET
+    // Address: 0xABS!0xOFFSET — 显示偏移地址
     let bang = rest.find('!')?;
-    let address = &rest[..bang];
 
     let offset_start = bang + 1;
     let offset_end = rest[offset_start..].find(' ').map(|p| offset_start + p).unwrap_or(rest.len());
-    let so_offset = &rest[offset_start..offset_end];
+    let address = &rest[offset_start..offset_end]; // 偏移地址
+    let so_offset = address; // 与 address 相同
 
     // Instruction text
     let insn_start = if offset_end < rest.len() { offset_end + 1 } else { rest.len() };
