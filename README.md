@@ -399,7 +399,7 @@ xattr -cr "/Applications/Trace UI.app"
 
 ## 致谢
 
-- [GumTrace](https://github.com/lidongyooo/GumTrace) — 本项目官方指定的真机 trace 采集工具，基于 Frida Stalker 实现 ARM64 指令级追踪，支持函数调用识别、JNI 调用捕获、参数解析及 hexdump 输出。GumTrace 与 Trace UI 深度适配，是在真机环境下获取高质量 trace 日志的推荐方案。感谢 [@lidongyooo](https://github.com/lidongyooo) 的开源贡献！
+- [GumTrace](https://github.com/lidongyooo/GumTrace) — 本项目官方指定的真机 trace 采集工具，基于 Frida Gum (Stalker) 引擎的 ARM64 动态指令追踪工具，支持 Android 和 iOS 平台。支持**指令级追踪**、**寄存器快照** 、**内存访问追踪**、**函数调用拦截**、**系统调用追踪**、**Android JNI 追踪** 、**iOS ObjC 追踪**。GumTrace 与 Trace UI 深度适配，是在真机环境下获取高质量 trace 日志的推荐方案。感谢 [@lidongyooo](https://github.com/lidongyooo) 的开源贡献！
 - [unidbg](https://github.com/zhkl0228/unidbg) — 优秀的 Android native 模拟执行框架，本项目同时支持其输出的 trace 日志格式。
 
 ## 许可证
