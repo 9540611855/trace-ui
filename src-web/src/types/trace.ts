@@ -48,6 +48,7 @@ export interface SearchMatch {
   disasm: string;
   changes: string;
   mem_rw: string | null;
+  call_info: CallInfoDto | null;
 }
 
 export interface SearchResult {

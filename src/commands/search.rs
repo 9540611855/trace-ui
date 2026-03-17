@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use crate::state::AppState;
+use crate::commands::browse::CallInfoDto;
 
 #[derive(Deserialize)]
 pub struct SearchRequest {
@@ -20,6 +21,7 @@ pub struct SearchMatch {
     pub disasm: String,
     pub changes: String,
     pub mem_rw: Option<String>,
+    pub call_info: Option<CallInfoDto>,
 }
 
 #[derive(Serialize)]
@@ -65,17 +67,19 @@ pub async fn search_trace(
     let max_results = request.max_results;
 
     // 预构建 call_annotations 的搜索文本: seq -> searchable_text
-    let (mmap_arc, total_lines, trace_format, call_search_texts) = {
+    let (mmap_arc, total_lines, trace_format, call_search_texts, call_annotations) = {
         let sessions = state.sessions.read().map_err(|e| e.to_string())?;
         let session = sessions.get(&session_id).ok_or_else(|| format!("Session {} 不存在", session_id))?;
         let texts: std::collections::HashMap<u32, String> = session.call_annotations.iter()
             .map(|(&seq, ann)| (seq, ann.searchable_text()))
             .collect();
+        let ann_map = session.call_annotations.clone();
         (
             session.mmap.clone(),
             session.line_index.as_ref().map(|li| li.total_lines()).unwrap_or(0),
             session.trace_format,
             texts,
+            ann_map,
         )
     };
 
@@ -115,12 +119,19 @@ pub async fn search_trace(
                     crate::taint::types::TraceFormat::Gumtrace => crate::commands::browse::parse_trace_line_gumtrace(seq, line),
                 };
                 if let Some(parsed) = parsed {
+                        let call_info = call_annotations.get(&seq).map(|ann| CallInfoDto {
+                            func_name: ann.func_name.clone(),
+                            is_jni: ann.is_jni,
+                            summary: ann.summary(),
+                            tooltip: ann.tooltip(),
+                        });
                         matches.push(SearchMatch {
                             seq: parsed.seq,
                             address: parsed.address,
                             disasm: parsed.disasm,
                             changes: parsed.changes,
                             mem_rw: parsed.mem_rw,
+                            call_info,
                         });
                     }
                 }

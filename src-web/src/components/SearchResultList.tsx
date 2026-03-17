@@ -149,6 +149,19 @@ export default function SearchResultList({
                   <span style={{ width: 90, flexShrink: 0, color: "var(--text-address)" }}>{match.address}</span>
                   <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     <DisasmHighlight text={match.disasm} />
+                    {match.call_info && (
+                      <span style={{
+                        marginLeft: 8,
+                        fontStyle: "italic",
+                        color: match.call_info.is_jni ? "var(--asm-immediate)" : "var(--text-secondary)",
+                      }}
+                        title={match.call_info.tooltip}
+                      >
+                        {match.call_info.summary.length > 80
+                          ? match.call_info.summary.slice(0, 80) + "..."
+                          : match.call_info.summary}
+                      </span>
+                    )}
                   </span>
                   <span style={{ width: changesWidth, color: "var(--text-changes)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{match.changes}</span>
                 </div>
