@@ -49,6 +49,57 @@ impl CallAnnotation {
     pub fn tooltip(&self) -> String {
         self.raw_lines.join("\n")
     }
+
+    /// 将 raw_lines 中的 hexdump 行解析为连续字节流，返回 (hex_string, ascii_string)。
+    /// hex_string: "48 74 74 70 52 65 71 75 ..." 连续的 hex 字节，跨行拼接
+    /// ascii_string: "HttpRequestCallback\0" 连续的 ASCII 文本，跨行拼接
+    pub fn merged_hexdump(&self) -> (String, Vec<u8>) {
+        let mut hex_parts = Vec::new();
+        let mut bytes = Vec::new();
+        for line in &self.raw_lines {
+            let trimmed = line.trim();
+            // hexdump 数据行格式: "ADDR: XX XX XX ... |ASCII...|"
+            // 跳过 "hexdump at address ..." 头行
+            if trimmed.starts_with("hexdump ") || trimmed.is_empty() {
+                continue;
+            }
+            // 检测是否是 hex 数据行：首字符是十六进制数字且含 ": "
+            if let Some(colon_pos) = trimmed.find(": ") {
+                let addr_part = &trimmed[..colon_pos];
+                if addr_part.chars().all(|c| c.is_ascii_hexdigit()) {
+                    // 提取 hex 部分（冒号后到 | 之前）
+                    let after_colon = &trimmed[colon_pos + 2..];
+                    let hex_end = after_colon.find('|').unwrap_or(after_colon.len());
+                    let hex_str = after_colon[..hex_end].trim();
+                    hex_parts.push(hex_str.to_string());
+                    // 解析 hex 字节
+                    for part in hex_str.split_whitespace() {
+                        if let Ok(b) = u8::from_str_radix(part, 16) {
+                            bytes.push(b);
+                        }
+                    }
+                }
+            }
+        }
+        (hex_parts.join(" "), bytes)
+    }
+
+    /// 生成用于搜索的完整文本，包含 summary + tooltip + 连续 hexdump ASCII
+    pub fn searchable_text(&self) -> String {
+        let mut text = format!("{}\n{}", self.summary(), self.tooltip());
+        let (hex_str, raw_bytes) = self.merged_hexdump();
+        if !hex_str.is_empty() {
+            text.push('\n');
+            text.push_str(&hex_str);
+            // 追加连续 ASCII 表示（可打印字符保留，不可打印用 . 替换）
+            let ascii: String = raw_bytes.iter().map(|&b| {
+                if b.is_ascii_graphic() || b == b' ' { b as char } else { '.' }
+            }).collect();
+            text.push('\n');
+            text.push_str(&ascii);
+        }
+        text
+    }
 }
 
 /// 从文件的前几行自动检测 trace 格式

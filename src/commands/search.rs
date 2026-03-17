@@ -64,13 +64,18 @@ pub async fn search_trace(
     let mode = parse_search_mode(&request.query)?;
     let max_results = request.max_results;
 
-    let (mmap_arc, total_lines, trace_format) = {
+    // 预构建 call_annotations 的搜索文本: seq -> searchable_text
+    let (mmap_arc, total_lines, trace_format, call_search_texts) = {
         let sessions = state.sessions.read().map_err(|e| e.to_string())?;
         let session = sessions.get(&session_id).ok_or_else(|| format!("Session {} 不存在", session_id))?;
+        let texts: std::collections::HashMap<u32, String> = session.call_annotations.iter()
+            .map(|(&seq, ann)| (seq, ann.searchable_text()))
+            .collect();
         (
             session.mmap.clone(),
             session.line_index.as_ref().map(|li| li.total_lines()).unwrap_or(0),
             session.trace_format,
+            texts,
         )
     };
 
@@ -93,6 +98,14 @@ pub async fn search_trace(
                 SearchMode::Text(needle) => memchr::memmem::find(line, needle).is_some(),
                 SearchMode::Regex(re) => re.is_match(line),
             };
+            // 未命中原始行时，检查该行关联的 call_annotation
+            let is_match = is_match || (!is_match && call_search_texts.get(&seq).map_or(false, |text| {
+                let text_bytes = text.as_bytes();
+                match &mode {
+                    SearchMode::Text(needle) => memchr::memmem::find(text_bytes, needle).is_some(),
+                    SearchMode::Regex(re) => re.is_match(text_bytes),
+                }
+            }));
 
             if is_match {
                 total_matches += 1;
