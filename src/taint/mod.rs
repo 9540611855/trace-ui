@@ -184,6 +184,9 @@ pub fn scan_unified(
                         }
                     }
                 }
+            } else if current_annotation.is_some() {
+                // 空行或无法识别的行出现在 call annotation 块内部（如 hexdump length 0x0 后的空行），也消化掉
+                consumed_seqs.push(i);
             }
 
             state.line_count += 1;
