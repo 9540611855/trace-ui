@@ -35,6 +35,8 @@ export function useTraceStore(skipStrings: boolean = false) {
   const [indexError, setIndexError] = useState<{ message: string; filePath: string } | null>(null);
   const indexErrorRef = useRef<typeof indexError>(null);
   const [hasStringIndexMap, setHasStringIndexMap] = useState<Map<string, boolean>>(new Map());
+  const skipStringsRef = useRef(skipStrings);
+  skipStringsRef.current = skipStrings;
 
   // Search state (top-level, not per-session)
   const [searchResults, setSearchResults] = useState<SearchMatch[]>([]);
@@ -200,7 +202,7 @@ export function useTraceStore(skipStrings: boolean = false) {
       // 文件加载完成，前端主动启动索引构建
       setLoadingMessage("Loading file... 100%");
       const sid = result.sessionId;
-      invoke("build_index", { sessionId: sid, skipStrings: skipStrings || undefined }).catch(async (e) => {
+      invoke("build_index", { sessionId: sid, skipStrings: skipStringsRef.current || undefined }).catch(async (e) => {
         // 索引构建失败：关闭 session，标记错误
         setIsLoading(false);
         setLoadingMessage("");
@@ -288,7 +290,7 @@ export function useTraceStore(skipStrings: boolean = false) {
     isRebuildingRef.current = true;
     setIsLoading(true);
     setLoadingMessage("Rebuilding index... 0%");
-    invoke("build_index", { sessionId: sid, force: true, skipStrings: skipStrings || undefined }).catch((e) => {
+    invoke("build_index", { sessionId: sid, force: true, skipStrings: skipStringsRef.current || undefined }).catch((e) => {
       console.error(e);
       setIsLoading(false);
       setLoadingMessage("");

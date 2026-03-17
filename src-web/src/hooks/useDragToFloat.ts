@@ -22,12 +22,17 @@ export function useDragToFloat({ onFloat, onActivate }: UseDragToFloatOptions) {
     startX: number;
     startY: number;
     ghost: HTMLDivElement | null;
+    removeListeners: (() => void) | null;
   } | null>(null);
 
   const cleanupDrag = useCallback(() => {
     const ds = dragState.current;
-    if (ds?.ghost) {
+    if (!ds) return;
+    if (ds.ghost) {
       document.body.removeChild(ds.ghost);
+    }
+    if (ds.removeListeners) {
+      ds.removeListeners();
     }
     dragState.current = null;
     document.body.style.cursor = "";
@@ -37,14 +42,8 @@ export function useDragToFloat({ onFloat, onActivate }: UseDragToFloatOptions) {
   const startDrag = useCallback((id: string, label: string, e: React.MouseEvent) => {
     if (e.button !== 0) return; // left button only
 
-    dragState.current = {
-      active: false,
-      id,
-      tabLabel: label,
-      startX: e.clientX,
-      startY: e.clientY,
-      ghost: null,
-    };
+    // 清理上一次未完成的拖拽状态（ghost + 事件监听器）
+    cleanupDrag();
 
     const onMouseMove = (ev: MouseEvent) => {
       const ds = dragState.current;
@@ -84,29 +83,37 @@ export function useDragToFloat({ onFloat, onActivate }: UseDragToFloatOptions) {
     };
 
     const onMouseUp = (ev: MouseEvent) => {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-      document.removeEventListener("keydown", onKeyDown);
-
       const ds = dragState.current;
-      if (ds?.active) {
-        const dragId = ds.id;
-        cleanupDrag();
+      const wasActive = ds?.active;
+      const dragId = ds?.id;
+      cleanupDrag();
+      if (wasActive && dragId) {
         onFloat(dragId, { x: ev.screenX, y: ev.screenY });
-      } else {
-        const dragId = ds?.id;
-        cleanupDrag();
-        if (dragId) onActivate(dragId);
+      } else if (dragId) {
+        onActivate(dragId);
       }
     };
 
     const onKeyDown = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") {
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
-        document.removeEventListener("keydown", onKeyDown);
         cleanupDrag();
       }
+    };
+
+    const removeListeners = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+
+    dragState.current = {
+      active: false,
+      id,
+      tabLabel: label,
+      startX: e.clientX,
+      startY: e.clientY,
+      ghost: null,
+      removeListeners,
     };
 
     document.addEventListener("mousemove", onMouseMove);
