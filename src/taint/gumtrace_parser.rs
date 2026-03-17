@@ -204,7 +204,13 @@ fn parse_line_gumtrace_inner(raw: &str, extract_regs: bool) -> Option<ParsedLine
     }
 
     let semicolon_pos = memchr::memchr(b';', &bytes[insn_start..]).map(|p| insn_start + p);
-    let insn_end = semicolon_pos.unwrap_or(bytes.len());
+    // 当没有 ';' 时，通过 '=0x' 模式定位注解起始位置
+    let (insn_end, annot_start) = if let Some(semi) = semicolon_pos {
+        (semi, semi + 1)
+    } else {
+        let annot = find_annotation_start(bytes, insn_start);
+        (annot, annot)
+    };
 
     let insn_text = std::str::from_utf8(&bytes[insn_start..insn_end]).ok()?.trim();
 
@@ -227,11 +233,10 @@ fn parse_line_gumtrace_inner(raw: &str, extract_regs: bool) -> Option<ParsedLine
     let raw_first_reg_prefix = parse_operands_into(operand_text, &mut result_line);
 
     // 6. Find " -> " arrow (gumtrace uses -> instead of =>)
-    let search_start = semicolon_pos.unwrap_or(insn_end);
-    let tail = &bytes[search_start..];
+    let tail = &bytes[annot_start..];
     let arrow_rel = memmem::find(tail, b" -> ");
     let has_arrow = arrow_rel.is_some();
-    let arrow_abs_pos = arrow_rel.map(|rel| search_start + rel);
+    let arrow_abs_pos = arrow_rel.map(|rel| annot_start + rel);
 
     // 7. Extract register values if in full mode
     let (pre_arrow_regs, post_arrow_regs);
@@ -249,8 +254,8 @@ fn parse_line_gumtrace_inner(raw: &str, extract_regs: bool) -> Option<ParsedLine
     }
 
     // 8. Parse memory ops: mem_w=0xADDR or mem_r=0xADDR
-    let mem_op = if let Some(sc) = semicolon_pos {
-        find_gumtrace_mem_op(&bytes[sc..], mnemonic, operand_text, raw_first_reg_prefix, bytes, arrow_abs_pos)
+    let mem_op = if annot_start < bytes.len() {
+        find_gumtrace_mem_op(&bytes[annot_start..], mnemonic, operand_text, raw_first_reg_prefix, bytes, arrow_abs_pos)
     } else {
         None
     };
@@ -269,6 +274,36 @@ fn parse_line_gumtrace_inner(raw: &str, extract_regs: bool) -> Option<ParsedLine
     result_line.post_arrow_regs = post_arrow_regs;
 
     Some(result_line)
+}
+
+/// 当行内没有 ';' 分隔符时，通过 '=0x' 模式找到寄存器注解的起始位置。
+/// 例如 `stp xzr, xzr, [x0]x0=0x7c78c651b0` → 返回 `x0=0x` 中 `x` 的位置。
+fn find_annotation_start(bytes: &[u8], insn_start: usize) -> usize {
+    let search = &bytes[insn_start..];
+    let mut pos = 0;
+    while pos + 3 < search.len() {
+        if let Some(eq_pos) = memmem::find(&search[pos..], b"=0x") {
+            let abs_eq = pos + eq_pos;
+            if abs_eq == 0 {
+                pos = abs_eq + 3;
+                continue;
+            }
+            // 向前查找寄存器名（连续的字母数字字符）
+            let mut name_start = abs_eq;
+            while name_start > 0 && search[name_start - 1].is_ascii_alphanumeric() {
+                name_start -= 1;
+            }
+            // 至少 2 字符且以字母开头才算寄存器名
+            let name_len = abs_eq - name_start;
+            if name_len >= 2 && search[name_start].is_ascii_alphabetic() {
+                return insn_start + name_start;
+            }
+            pos = abs_eq + 3;
+        } else {
+            break;
+        }
+    }
+    bytes.len()
 }
 
 /// Find mem_w=0xADDR or mem_r=0xADDR in gumtrace format.
@@ -513,5 +548,25 @@ mod tests {
             SpecialLine::Ret { value } => assert_eq!(value, "0x13"),
             _ => panic!("expected Ret"),
         }
+    }
+
+    #[test]
+    fn test_parse_gumtrace_no_semicolon_mem_write() {
+        // 有些 gumtrace 行没有 ';' 分隔符
+        let raw = "[libc++_shared.so] 0x7b00797c7c!0x96c7c stp xzr, xzr, [x0]x0=0x7c78c651b0 mem_w=0x7c78c651b0";
+        let line = parse_line_gumtrace(raw).unwrap();
+        assert_eq!(line.mnemonic.as_str(), "stp");
+        assert_eq!(line.operands.len(), 3); // xzr, xzr, x0(base)
+        let mem = line.mem_op.as_ref().unwrap();
+        assert!(mem.is_write);
+        assert_eq!(mem.abs, 0x7c78c651b0);
+    }
+
+    #[test]
+    fn test_parse_gumtrace_no_semicolon_with_arrow() {
+        let raw = "[libsscronet.so] 0x7a39fa11e4!0x5a01e4 mov x0, x1 x0=0xdead x1=0xbeef -> x0=0xbeef";
+        let line = parse_line_gumtrace(raw).unwrap();
+        assert_eq!(line.mnemonic.as_str(), "mov");
+        assert!(line.has_arrow);
     }
 }

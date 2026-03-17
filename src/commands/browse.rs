@@ -3,6 +3,14 @@ use tauri::State;
 use crate::state::AppState;
 
 #[derive(Serialize)]
+pub struct CallInfoDto {
+    pub func_name: String,
+    pub is_jni: bool,
+    pub summary: String,
+    pub tooltip: String,
+}
+
+#[derive(Serialize)]
 pub struct TraceLine {
     pub seq: u32,
     pub address: String,
@@ -13,6 +21,7 @@ pub struct TraceLine {
     pub mem_addr: Option<String>,  // 内存访问绝对地址 "0xbffff6b0"
     pub mem_size: Option<u8>,      // 内存访问字节宽度 (1/2/4/8/16)
     pub raw: String,               // 原始 trace 行文本
+    pub call_info: Option<CallInfoDto>,
 }
 
 /// 从原始 trace 行提取结构化数据
@@ -37,7 +46,115 @@ pub fn parse_trace_line(seq: u32, raw: &[u8]) -> Option<TraceLine> {
         mem_addr,
         mem_size,
         raw: line.to_string(),
+        call_info: None,
     })
+}
+
+/// 解析 gumtrace 格式的 trace 行
+pub fn parse_trace_line_gumtrace(seq: u32, raw: &[u8]) -> Option<TraceLine> {
+    let line = std::str::from_utf8(raw).ok()?;
+
+    // 非指令行（特殊行）返回 None
+    if !line.starts_with('[') {
+        return None;
+    }
+
+    // [module] 0xABS!0xOFFSET instruction...
+    let bracket_end = line.find("] ")?;
+    let rest = &line[bracket_end + 2..];
+
+    // Address: 0xABS!0xOFFSET
+    let bang = rest.find('!')?;
+    let address = &rest[..bang];
+
+    let offset_start = bang + 1;
+    let offset_end = rest[offset_start..].find(' ').map(|p| offset_start + p).unwrap_or(rest.len());
+    let so_offset = &rest[offset_start..offset_end];
+
+    // Instruction text
+    let insn_start = if offset_end < rest.len() { offset_end + 1 } else { rest.len() };
+    let semicolon_pos = rest[insn_start..].find(';').map(|p| insn_start + p);
+    let (insn_end, annot_start) = if let Some(semi) = semicolon_pos {
+        (semi, semi + 1)
+    } else {
+        let annot = find_annotation_start_str(rest, insn_start);
+        (annot, annot)
+    };
+    let disasm = rest[insn_start..insn_end].trim().to_string();
+
+    // Memory operation (search in annotation area)
+    let annot_area = &rest[annot_start..];
+    let mem_rw = if annot_area.contains("mem_w=0x") {
+        Some("W".to_string())
+    } else if annot_area.contains("mem_r=0x") {
+        Some("R".to_string())
+    } else {
+        None
+    };
+
+    let mem_addr = extract_gumtrace_mem_addr(annot_area);
+    let mem_size = extract_mem_size(&disasm);
+
+    // Changes: after " -> " in annotation area
+    let changes = if let Some(pos) = annot_area.find(" -> ") {
+        annot_area[pos + 4..].trim().to_string()
+    } else {
+        String::new()
+    };
+
+    Some(TraceLine {
+        seq,
+        address: address.to_string(),
+        so_offset: so_offset.to_string(),
+        disasm,
+        changes,
+        mem_rw,
+        mem_addr,
+        mem_size,
+        raw: line.to_string(),
+        call_info: None,
+    })
+}
+
+/// 当行内没有 ';' 分隔符时，通过 '=0x' 模式找到寄存器注解的起始位置。
+fn find_annotation_start_str(text: &str, insn_start: usize) -> usize {
+    let search = &text[insn_start..];
+    let mut pos = 0;
+    while pos + 3 < search.len() {
+        if let Some(eq_pos) = search[pos..].find("=0x") {
+            let abs_eq = pos + eq_pos;
+            if abs_eq == 0 {
+                pos = abs_eq + 3;
+                continue;
+            }
+            let bytes = search.as_bytes();
+            let mut name_start = abs_eq;
+            while name_start > 0 && bytes[name_start - 1].is_ascii_alphanumeric() {
+                name_start -= 1;
+            }
+            let name_len = abs_eq - name_start;
+            if name_len >= 2 && bytes[name_start].is_ascii_alphabetic() {
+                return insn_start + name_start;
+            }
+            pos = abs_eq + 3;
+        } else {
+            break;
+        }
+    }
+    text.len()
+}
+
+fn extract_gumtrace_mem_addr(line: &str) -> Option<String> {
+    for marker in &["mem_w=", "mem_r="] {
+        if let Some(pos) = line.find(marker) {
+            let val_start = pos + marker.len();
+            let rest = &line[val_start..];
+            let val_end = rest.find(|c: char| !c.is_ascii_hexdigit() && c != 'x' && c != 'X')
+                .unwrap_or(rest.len());
+            return Some(rest[..val_end].to_string());
+        }
+    }
+    None
 }
 
 fn extract_so_offset(line: &str) -> String {
@@ -170,12 +287,26 @@ pub fn get_lines(session_id: String, seqs: Vec<u32>, state: State<'_, AppState>)
     let session = sessions.get(&session_id).ok_or_else(|| format!("Session {} 不存在", session_id))?;
     let line_index = session.line_index.as_ref()
         .ok_or_else(|| "索引尚未构建完成".to_string())?;
+    let format = session.trace_format;
 
     let mut results = Vec::with_capacity(seqs.len());
     for &seq in &seqs {
         if let Some(raw) = line_index.get_line(&session.mmap, seq) {
-            if let Some(parsed) = parse_trace_line(seq, raw) {
-                results.push(parsed);
+            let parsed = match format {
+                crate::taint::types::TraceFormat::Unidbg => parse_trace_line(seq, raw),
+                crate::taint::types::TraceFormat::Gumtrace => parse_trace_line_gumtrace(seq, raw),
+            };
+            if let Some(mut line) = parsed {
+                // Fill call_info from session state
+                if let Some(ann) = session.call_annotations.get(&seq) {
+                    line.call_info = Some(CallInfoDto {
+                        func_name: ann.func_name.clone(),
+                        is_jni: ann.is_jni,
+                        summary: ann.summary(),
+                        tooltip: ann.tooltip(),
+                    });
+                }
+                results.push(line);
                 continue;
             }
         }
@@ -189,9 +320,17 @@ pub fn get_lines(session_id: String, seqs: Vec<u32>, state: State<'_, AppState>)
             mem_addr: None,
             mem_size: None,
             raw: format!("(line {} unparseable)", seq + 1),
+            call_info: None,
         });
     }
     Ok(results)
+}
+
+#[tauri::command]
+pub fn get_consumed_seqs(session_id: String, state: State<'_, AppState>) -> Result<Vec<u32>, String> {
+    let sessions = state.sessions.read().map_err(|e| e.to_string())?;
+    let session = sessions.get(&session_id).ok_or_else(|| format!("Session {} 不存在", session_id))?;
+    Ok(session.consumed_seqs.clone())
 }
 
 #[cfg(test)]
