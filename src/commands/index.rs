@@ -130,8 +130,13 @@ async fn build_index_inner(
             "progress": 0.0,
             "done": false,
         }));
-        let mut scan_result = taint::scan_unified(data, false, false, skip_strings, Some(progress_fn))
-            .map_err(|e| format!("统一扫描失败: {}", e))?;
+        // Determine number of parallel chunks based on available CPU cores
+        let num_cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        let mut scan_result = taint::parallel::scan_unified_parallel(
+            data, false, false, skip_strings, Some(progress_fn), num_cpus,
+        ).map_err(|e| format!("统一扫描失败: {}", e))?;
 
         // 格式检查：如果没有任何行被成功解析，说明不是有效的 trace 文件
         if scan_result.scan_state.parsed_count == 0 && scan_result.scan_state.line_count > 0 {
