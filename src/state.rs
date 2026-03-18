@@ -35,6 +35,17 @@ pub struct SessionState {
     pub trace_format: TraceFormat,
     pub call_annotations: std::collections::HashMap<u32, CallAnnotation>,
     pub consumed_seqs: Vec<u32>,
+    /// 缓存 call_annotations 的搜索文本，避免每次搜索重复生成
+    pub call_search_texts: std::collections::HashMap<u32, String>,
+}
+
+impl SessionState {
+    /// 从 call_annotations 重建搜索文本缓存
+    pub fn rebuild_call_search_texts(&mut self) {
+        self.call_search_texts = self.call_annotations.iter()
+            .map(|(&seq, ann)| (seq, ann.searchable_text()))
+            .collect();
+    }
 }
 
 /// 全局应用状态，支持多 Session（key = session_id）

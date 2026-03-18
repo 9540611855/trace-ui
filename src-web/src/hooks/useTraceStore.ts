@@ -138,6 +138,8 @@ export function useTraceStore(skipStrings: boolean = false) {
               setIndexError({ message: error, filePath: s?.filePath ?? "" });
             }
           } else {
+            // 仅在后端发来 done:false 的进度事件时才显示 "Building index..."
+            // 缓存命中时后端只发 done:true，不会走到这里
             const pct = Math.round(progress * 100);
             const label = isRebuildingRef.current ? "Rebuilding index" : "Building index";
             setLoadingMessage(pct === 0 ? `${label}...` : `${label}... ${pct}%`);
@@ -198,7 +200,7 @@ export function useTraceStore(skipStrings: boolean = false) {
       clearSearchState();
 
       // 文件加载完成，前端主动启动索引构建
-      setLoadingMessage("Building index...");
+      // 不在此处设置 "Building index..." 消息，由后端进度事件驱动显示
       const sid = result.sessionId;
       invoke("build_index", { sessionId: sid, skipStrings: skipStringsRef.current || undefined }).catch(async (e) => {
         // 索引构建失败：关闭 session，标记错误

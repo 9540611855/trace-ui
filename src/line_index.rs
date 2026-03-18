@@ -4,7 +4,7 @@ const BLOCK_SIZE: u32 = 256;
 
 /// 采样行偏移索引：每 256 行记录一个字节偏移，查找时从最近采样点向前扫描。
 /// 内存占用从 O(n) 降至 O(n/256)。
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct LineIndex {
     /// sampled_offsets[i] = 第 i * BLOCK_SIZE 行的起始字节偏移
     sampled_offsets: Vec<u64>,
@@ -110,6 +110,24 @@ impl LineIndex {
 
     pub fn total_lines(&self) -> u32 {
         self.total
+    }
+
+    /// 返回指定行号的起始字节偏移（通过采样点 + 向前扫描换行符定位）。
+    /// 用于并行搜索时的分块定位。
+    pub fn line_byte_offset(&self, data: &[u8], seq: u32) -> Option<u64> {
+        if seq >= self.total {
+            return None;
+        }
+        let block = (seq / BLOCK_SIZE) as usize;
+        let offset_in_block = (seq % BLOCK_SIZE) as usize;
+        let mut pos = self.sampled_offsets[block] as usize;
+        for _ in 0..offset_in_block {
+            match memchr(b'\n', &data[pos..]) {
+                Some(rel) => pos = pos + rel + 1,
+                None => return None,
+            }
+        }
+        Some(pos as u64)
     }
 
     /// Merge multiple LineIndex instances (for parallel scanning).

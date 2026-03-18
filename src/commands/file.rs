@@ -51,6 +51,7 @@ pub async fn create_session(
             trace_format: TraceFormat::Unidbg,
             call_annotations: std::collections::HashMap::new(),
             consumed_seqs: Vec::new(),
+            call_search_texts: std::collections::HashMap::new(),
         });
     }
 

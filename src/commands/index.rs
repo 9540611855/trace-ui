@@ -159,6 +159,7 @@ async fn build_index_inner(
             session.trace_format = scan_result.format;
             session.call_annotations = scan_result.call_annotations;
             session.consumed_seqs = scan_result.consumed_seqs;
+            session.rebuild_call_search_texts();
             session.scan_state = Some(scan_result.scan_state);
             session.phase2 = Some(scan_result.phase2);
             session.line_index = Some(scan_result.line_index);
