@@ -1,8 +1,9 @@
 import { useSyncExternalStore } from "react";
 import type { ThemeId, ThemeColors } from "../theme/themes";
-import { getTheme } from "../theme/themes";
+import { getTheme, THEMES } from "../theme/themes";
 
 const THEME_KEY = "trace-ui-theme";
+const VALID_IDS = new Set<string>(THEMES.map(t => t.id));
 
 let _themeId: ThemeId = loadSaved();
 let _colors: ThemeColors = getTheme(_themeId);
@@ -12,7 +13,7 @@ function _emit() { _listeners.forEach(l => l()); }
 function loadSaved(): ThemeId {
   try {
     const v = localStorage.getItem(THEME_KEY);
-    if (v === "dark" || v === "light" || v === "dim") return v;
+    if (v && VALID_IDS.has(v)) return v as ThemeId;
   } catch { /* noop */ }
   return "dark";
 }

@@ -28,7 +28,7 @@ function formatSize(bytes: number): string {
 }
 
 const DIALOG_WIDTH = 620;
-const DIALOG_HEIGHT = 420;
+const DIALOG_HEIGHT = 480;
 
 export default function PreferencesDialog({ preferences, onSave, onClose, onClearCache }: Props) {
   const [local, setLocal] = useState(preferences);
@@ -174,39 +174,49 @@ export default function PreferencesDialog({ preferences, onSave, onClose, onClea
             {tab === "General" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
                 {/* Theme */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   <div style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 600 }}>
                     Theme
                   </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    {THEMES.map(t => {
-                      const active = local.theme === t.id;
-                      return (
-                        <button
-                          key={t.id}
-                          onClick={() => {
-                            setLocal(prev => ({ ...prev, theme: t.id }));
-                            themeStore.set(t.id); // 即时预览
-                          }}
-                          onMouseEnter={(e) => { if (!active) e.currentTarget.style.borderColor = "var(--text-secondary)"; }}
-                          onMouseLeave={(e) => { if (!active) e.currentTarget.style.borderColor = "var(--border-color)"; }}
-                          style={{
-                            padding: "6px 16px",
-                            fontSize: 12,
-                            color: active ? "#fff" : "var(--text-primary)",
-                            background: active ? "var(--btn-primary)" : "var(--bg-input)",
-                            border: `1px solid ${active ? "var(--btn-primary)" : "var(--border-color)"}`,
-                            borderRadius: 4,
-                            cursor: "pointer",
-                            fontWeight: active ? 600 : 400,
-                            transition: "all 0.15s",
-                          }}
-                        >
-                          {t.label}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {(["dark", "light"] as const).map(group => {
+                    const groupThemes = THEMES.filter(t => t.group === group);
+                    return (
+                      <div key={group} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <div style={{ fontSize: 10, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                          {group === "dark" ? "Dark" : "Light"}
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                          {groupThemes.map(t => {
+                            const active = local.theme === t.id;
+                            return (
+                              <button
+                                key={t.id}
+                                onClick={() => {
+                                  setLocal(prev => ({ ...prev, theme: t.id }));
+                                  themeStore.set(t.id); // 即时预览
+                                }}
+                                onMouseEnter={(e) => { if (!active) e.currentTarget.style.borderColor = "var(--text-secondary)"; }}
+                                onMouseLeave={(e) => { if (!active) e.currentTarget.style.borderColor = "var(--border-color)"; }}
+                                style={{
+                                  padding: "4px 10px",
+                                  fontSize: 11,
+                                  color: active ? "#fff" : "var(--text-primary)",
+                                  background: active ? "var(--btn-primary)" : "var(--bg-input)",
+                                  border: `1px solid ${active ? "var(--btn-primary)" : "var(--border-color)"}`,
+                                  borderRadius: 4,
+                                  cursor: "pointer",
+                                  fontWeight: active ? 600 : 400,
+                                  transition: "all 0.15s",
+                                }}
+                              >
+                                {t.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
 
                 {/* Startup */}
