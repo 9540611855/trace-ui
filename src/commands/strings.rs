@@ -1,7 +1,6 @@
 use serde::Serialize;
 use tauri::State;
 use crate::state::AppState;
-use crate::taint::mem_access::MemRw;
 use crate::taint::strings::StringEncoding;
 use crate::phase2::extract_insn_offset;
 
@@ -42,11 +41,11 @@ pub fn get_strings(
     let sessions = state.sessions.read().map_err(|e| e.to_string())?;
     let session = sessions.get(&session_id)
         .ok_or_else(|| format!("Session {} 不存在", session_id))?;
-    let phase2 = session.phase2.as_ref().ok_or("索引尚未构建完成")?;
+    let string_index = session.string_index.as_ref().ok_or("索引尚未构建完成")?;
 
     let search_lower = search.as_ref().map(|s| s.to_lowercase());
 
-    let filtered: Vec<(usize, &crate::taint::strings::StringRecord)> = phase2.string_index.strings
+    let filtered: Vec<(usize, &crate::taint::strings::StringRecord)> = string_index.strings
         .iter()
         .enumerate()
         .filter(|(_, r)| r.byte_len >= min_len)
@@ -90,7 +89,7 @@ pub fn get_string_xrefs(
     let sessions = state.sessions.read().map_err(|e| e.to_string())?;
     let session = sessions.get(&session_id)
         .ok_or_else(|| format!("Session {} 不存在", session_id))?;
-    let phase2 = session.phase2.as_ref().ok_or("索引尚未构建完成")?;
+    let mem_view = session.mem_accesses_view().ok_or("索引尚未构建完成")?;
 
 
 
@@ -98,7 +97,6 @@ pub fn get_string_xrefs(
     let base_addr = u64::from_str_radix(addr_str, 16)
         .map_err(|_| format!("无效地址: {}", addr))?;
 
-    let mem_idx = &phase2.mem_accesses;
     let line_index = session.line_index.as_ref().ok_or("行索引未就绪")?;
     let mmap = &session.mmap;
 
@@ -107,13 +105,10 @@ pub fn get_string_xrefs(
 
     for offset in 0..byte_len as u64 {
         let target = base_addr + offset;
-        if let Some(records) = mem_idx.get(target) {
+        if let Some(records) = mem_view.query(target) {
             for rec in records {
                 if seen_seqs.insert(rec.seq) {
-                    let rw_str = match rec.rw {
-                        MemRw::Read => "R",
-                        MemRw::Write => "W",
-                    };
+                    let rw_str = if rec.is_read() { "R" } else { "W" };
                     let disasm = line_index.get_line(mmap, rec.seq)
                         .and_then(|raw| {
                             match session.trace_format {
@@ -155,11 +150,11 @@ pub async fn scan_strings(
         let sessions = state.sessions.read().map_err(|e| e.to_string())?;
         let session = sessions.get(&session_id)
             .ok_or_else(|| format!("Session {} 不存在", session_id))?;
-        let phase2 = session.phase2.as_ref().ok_or("索引尚未构建完成")?;
+        let mem_view = session.mem_accesses_view().ok_or("索引尚未构建完成")?;
 
         let mut writes: Vec<(u64, u64, u8, u32)> = Vec::new();
-        for (addr, rec) in phase2.mem_accesses.iter_all() {
-            if rec.rw == MemRw::Write && rec.size <= 8 {
+        for (addr, rec) in mem_view.iter_all() {
+            if rec.is_write() && rec.size <= 8 {
                 writes.push((addr, rec.data, rec.size, rec.seq));
             }
         }
@@ -192,8 +187,8 @@ pub async fn scan_strings(
         let sessions = state.sessions.read().map_err(|e| e.to_string())?;
         let session = sessions.get(&session_id)
             .ok_or_else(|| format!("Session {} 不存在", session_id))?;
-        let phase2 = session.phase2.as_ref().ok_or("索引尚未构建完成")?;
-        crate::taint::strings::StringBuilder::fill_xref_counts(&mut string_index, &phase2.mem_accesses);
+        let mem_view = session.mem_accesses_view().ok_or("索引尚未构建完成")?;
+        crate::taint::strings::StringBuilder::fill_xref_counts_view(&mut string_index, &mem_view);
     }
 
     // 6. Write results and update cache
@@ -201,10 +196,8 @@ pub async fn scan_strings(
         let mut sessions = state.sessions.write().map_err(|e| e.to_string())?;
         let session = sessions.get_mut(&session_id)
             .ok_or_else(|| format!("Session {} 不存在", session_id))?;
-        if let Some(ref mut phase2) = session.phase2 {
-            phase2.string_index = string_index;
-            crate::cache::save_cache(&session.file_path, &*session.mmap, phase2);
-        }
+        crate::cache::save_string_cache(&session.file_path, &*session.mmap, &string_index);
+        session.string_index = Some(string_index);
     }
 
     Ok(())

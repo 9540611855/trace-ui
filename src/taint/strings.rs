@@ -283,6 +283,25 @@ impl StringBuilder {
             record.xref_count = count;
         }
     }
+
+    pub fn fill_xref_counts_view(index: &mut StringIndex, mem_view: &crate::flat::mem_access::MemAccessView) {
+        use rustc_hash::FxHashMap;
+
+        let mut read_counts: FxHashMap<u64, u32> = FxHashMap::default();
+        for (addr, rec) in mem_view.iter_all() {
+            if rec.is_read() {
+                *read_counts.entry(addr).or_insert(0) += 1;
+            }
+        }
+
+        for record in &mut index.strings {
+            let mut count = 0u32;
+            for offset in 0..record.byte_len as u64 {
+                count += read_counts.get(&(record.addr + offset)).copied().unwrap_or(0);
+            }
+            record.xref_count = count;
+        }
+    }
 }
 
 fn is_printable_or_utf8(b: u8) -> bool {
