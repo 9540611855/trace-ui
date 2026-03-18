@@ -651,6 +651,7 @@ pub fn merge_all_chunks(
     let mut chunk_reg_ckpts = Vec::with_capacity(num_chunks);
     let mut chunk_string_indices = Vec::with_capacity(num_chunks);
     let mut chunk_line_indices = Vec::with_capacity(num_chunks);
+    let mut chunk_mem_indices = Vec::with_capacity(num_chunks);
     let mut all_consumed_seqs = Vec::new();
     let mut chunk_start_lines = Vec::with_capacity(num_chunks);
     let mut total_parsed_count = 0u32;
@@ -665,6 +666,7 @@ pub fn merge_all_chunks(
         chunk_pair_splits.push(chunk.pair_split);
         chunk_string_indices.push(chunk.string_index);
         chunk_line_indices.push(chunk.line_index);
+        chunk_mem_indices.push(chunk.mem_access_index);
         all_consumed_seqs.extend(chunk.consumed_seqs);
 
         // Move events (not clone) — saves ~20GB for large files
@@ -742,8 +744,19 @@ pub fn merge_all_chunks(
     all_consumed_seqs.extend(extra_consumed);
     all_consumed_seqs.sort_unstable();
 
-    // MemAccessIndex — built lazily on demand, not during initial scan
-    let mem_accesses = MemAccessIndex::new();
+    // MemAccessIndex — 逐 chunk 合并（每合并完一个就释放，避免内存翻倍）
+    // 此时 chunk_deps 已释放（~6GB），有足够内存空间
+    let mem_accesses = {
+        let mut merged = MemAccessIndex::new();
+        for chunk_idx in chunk_mem_indices.into_iter() {
+            // chunk_idx 被 move 进循环，iter_all 借用它，循环结束时 drop 释放
+            for (addr, record) in chunk_idx.iter_all() {
+                merged.add(addr, record.clone());
+            }
+            // chunk_idx 在这里被 drop，内存立即回收
+        }
+        merged
+    };
 
     // RegCheckpoints: merge all snapshots
     let merged_ckpts = {
@@ -757,8 +770,9 @@ pub fn merge_all_chunks(
         }
     };
 
-    // StringIndex
-    let string_index = merge_string_indices(chunk_string_indices);
+    // StringIndex — merge + fill xref counts (MemAccessIndex now available)
+    let mut string_index = merge_string_indices(chunk_string_indices);
+    crate::taint::strings::StringBuilder::fill_xref_counts(&mut string_index, &mem_accesses);
 
     // LineIndex
     let line_index = merge_line_indices(chunk_line_indices);

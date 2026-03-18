@@ -92,9 +92,7 @@ pub fn get_string_xrefs(
         .ok_or_else(|| format!("Session {} 不存在", session_id))?;
     let phase2 = session.phase2.as_ref().ok_or("索引尚未构建完成")?;
 
-    if phase2.mem_accesses.total_addresses() == 0 {
-        return Ok(Vec::new());
-    }
+
 
     let addr_str = addr.trim_start_matches("0x").trim_start_matches("0X");
     let base_addr = u64::from_str_radix(addr_str, 16)

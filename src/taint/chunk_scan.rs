@@ -16,7 +16,7 @@ use crate::line_index::LineIndexBuilder;
 use crate::phase2;
 use crate::taint::gumtrace_parser;
 use crate::taint::insn_class::{self, InsnClass};
-use crate::taint::mem_access::MemAccessIndex;
+use crate::taint::mem_access::{MemAccessIndex, MemAccessRecord, MemRw};
 use crate::taint::parallel_types::*;
 use crate::taint::parser;
 use crate::taint::reg_checkpoint::RegCheckpoints;
@@ -66,8 +66,7 @@ pub fn scan_chunk(
     let mut pair_split: FxHashMap<u32, PairSplitDeps> = FxHashMap::default();
 
     // ── Phase2 data ──
-    // NOTE: MemAccessIndex is NOT built during scan (saves ~18GB memory for large files).
-    // It will be built lazily on demand when memory queries are first issued.
+    let mut mem_idx = MemAccessIndex::new();
     let mut string_builder = if skip_strings {
         None
     } else {
@@ -630,9 +629,21 @@ pub fn scan_chunk(
             _ => {}
         }
 
-        // ── Phase2: MemAccess (count only — index built lazily) ──
+        // ── Phase2: MemAccess ──
         if let Some(ref mem_op) = line.mem_op {
             mem_op_count += 1;
+            let rw = if mem_op.is_write { MemRw::Write } else { MemRw::Read };
+            let insn_addr = phase2::extract_insn_addr(raw_line);
+            mem_idx.add(
+                mem_op.abs,
+                MemAccessRecord {
+                    seq: i,
+                    insn_addr,
+                    rw,
+                    data: mem_op.value.unwrap_or(0),
+                    size: mem_op.elem_width,
+                },
+            );
 
             // ── Phase2: String extraction ──
             if let Some(ref mut sb) = string_builder {
@@ -692,7 +703,7 @@ pub fn scan_chunk(
         init_mem_loads,
         pair_split,
         line_index,
-        mem_access_index: MemAccessIndex::new(),
+        mem_access_index: mem_idx,
         reg_checkpoints: reg_ckpts,
         string_index,
 

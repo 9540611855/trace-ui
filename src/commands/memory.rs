@@ -48,9 +48,7 @@ pub fn get_memory_at(
     let session = sessions.get(&session_id).ok_or_else(|| format!("Session {} 不存在", session_id))?;
     let phase2 = session.phase2.as_ref().ok_or("索引尚未构建完成")?;
 
-    if phase2.mem_accesses.total_addresses() == 0 {
-        return Err("内存索引正在后台构建中，请稍候...".to_string());
-    }
+
 
     // 解析地址
     let addr_str = addr.trim_start_matches("0x").trim_start_matches("0X");
@@ -129,9 +127,7 @@ pub fn get_mem_history(
     let session = sessions.get(&session_id).ok_or_else(|| format!("Session {} 不存在", session_id))?;
     let phase2 = session.phase2.as_ref().ok_or("索引尚未构建完成")?;
 
-    if phase2.mem_accesses.total_addresses() == 0 {
-        return Err("内存索引正在后台构建中，请稍候...".to_string());
-    }
+
 
     let addr_str = addr.trim_start_matches("0x").trim_start_matches("0X");
     let target_addr = u64::from_str_radix(addr_str, 16)
