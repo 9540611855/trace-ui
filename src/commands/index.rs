@@ -269,20 +269,7 @@ async fn build_index_inner(
         scan_result.scan_state.compact();
         eprintln!("[index] compact done");
 
-        // 保存缓存（大文件跳过：序列化 6GB+ 数据会导致内存压力过大 + 产生巨大缓存文件）
-        const CACHE_SIZE_LIMIT: usize = 2 * 1024 * 1024 * 1024; // 2GB
-        if data.len() <= CACHE_SIZE_LIMIT {
-            eprintln!("[index] saving cache...");
-            cache::save_cache(&file_path, data, &scan_result.phase2);
-            eprintln!("[index] phase2 cache saved");
-            cache::save_scan_cache(&file_path, data, &scan_result.scan_state);
-            eprintln!("[index] scan cache saved");
-            cache::save_line_index_cache(&file_path, data, &scan_result.line_index);
-            eprintln!("[index] line index cache saved");
-        } else {
-            eprintln!("[index] skipping cache (file size {} > {})", data.len(), CACHE_SIZE_LIMIT);
-        }
-
+        // 缓存写入移至 session 存储之后的后台线程，不阻塞用户
         eprintln!("[index] returning scan_result from spawn_blocking");
         Ok::<_, String>(scan_result)
     })
@@ -291,10 +278,10 @@ async fn build_index_inner(
 
     eprintln!("[index] spawn_blocking returned, writing to session...");
     // 写入结果
-    {
+    let file_path_for_cache = {
         let scan_result = result;
         let mut sessions = state.sessions.write().map_err(|e| e.to_string())?;
-        if let Some(session) = sessions.get_mut(session_id) {
+        let fp = if let Some(session) = sessions.get_mut(session_id) {
             session.total_lines = scan_result.line_index.total_lines();
             session.trace_format = scan_result.format;
             session.call_annotations = scan_result.call_annotations;
@@ -302,7 +289,36 @@ async fn build_index_inner(
             session.scan_state = Some(scan_result.scan_state);
             session.phase2 = Some(scan_result.phase2);
             session.line_index = Some(scan_result.line_index);
-        }
+            Some(session.file_path.clone())
+        } else {
+            None
+        };
+        fp
+    };
+
+    // 后台保存缓存（不阻塞用户交互）
+    if let Some(fp) = file_path_for_cache {
+        let app_cache = app.clone();
+        let sid_cache = session_id.to_string();
+        tauri::async_runtime::spawn(async move {
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                let state = app_cache.state::<AppState>();
+                let sessions = state.sessions.read().unwrap();
+                if let Some(session) = sessions.get(&*sid_cache) {
+                    let data: &[u8] = &session.mmap;
+                    if let Some(ref phase2) = session.phase2 {
+                        cache::save_cache(&fp, data, phase2);
+                    }
+                    if let Some(ref scan_state) = session.scan_state {
+                        cache::save_scan_cache(&fp, data, scan_state);
+                    }
+                    if let Some(ref line_index) = session.line_index {
+                        cache::save_line_index_cache(&fp, data, line_index);
+                    }
+                    eprintln!("[index] background cache save complete");
+                }
+            }).await;
+        });
     }
 
     Ok(())
