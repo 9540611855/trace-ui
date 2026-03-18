@@ -20,10 +20,15 @@ pub fn scan_unified_parallel(
         return taint::scan_unified(data, data_only, no_prune, skip_strings, progress_fn);
     }
 
+    let scan_start = std::time::Instant::now();
+
     let format = taint::gumtrace_parser::detect_format(data);
 
     // Phase 0: Split and count lines
     let chunks_meta = split_into_chunks(data, num_chunks);
+    eprintln!("[perf] Phase 0 (split+count): {:?}, {} chunks, {} lines",
+        scan_start.elapsed(), chunks_meta.len(),
+        chunks_meta.iter().map(|c| c.line_count).sum::<u32>());
 
     // LINE_MASK safety check: 29-bit line number limit (bits 29-31 reserved for flags)
     let total_lines: u32 = chunks_meta.iter().map(|c| c.line_count).sum();
@@ -83,11 +88,14 @@ pub fn scan_unified_parallel(
         })
         .collect();
 
+    eprintln!("[perf] Phase 1 (parallel scan): {:?}", scan_start.elapsed());
+
     // Phase 1 complete — progress is at 67%
     if let Some(ref cb) = progress_fn_arc {
         cb(data_len * 2 / 3, data_len);
     }
 
+    let phase2_start = std::time::Instant::now();
     // Phase 2: Sequential merge with progress reporting
     let merge_cb = |phase2_frac: f64| {
         if let Some(ref pfn) = progress_fn_arc {
@@ -97,6 +105,9 @@ pub fn scan_unified_parallel(
     };
 
     let result = merge::merge_all_chunks(chunk_results, format, data_only, skip_strings, Some(&merge_cb));
+
+    eprintln!("[perf] Phase 2 (merge): {:?}", phase2_start.elapsed());
+    eprintln!("[perf] Total scan: {:?}", scan_start.elapsed());
 
     if let Some(ref cb) = progress_fn_arc {
         cb(data.len(), data.len());

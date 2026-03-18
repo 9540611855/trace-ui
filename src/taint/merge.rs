@@ -702,6 +702,8 @@ pub fn merge_all_chunks(
 
     if let Some(ref cb) = progress_fn { cb(0.20); }
 
+    let phase2_timer = std::time::Instant::now();
+
     // === Rebuild unified data structures ===
 
     // Total lines (compute before dropping chunk_deps)
@@ -727,8 +729,11 @@ pub fn merge_all_chunks(
     drop(chunk_deps); // Free ~6GB immediately
     drop(all_patch_edges); // Free patch edges
 
+    eprintln!("[perf] rebuild_compact_deps: {:?}", phase2_timer.elapsed());
+
     if let Some(ref cb) = progress_fn { cb(0.70); }
 
+    let t = std::time::Instant::now();
     // CallTree
     let call_tree = replay_call_tree_events(&all_call_events, total_lines);
 
@@ -739,8 +744,11 @@ pub fn merge_all_chunks(
         (HashMap::new(), Vec::new())
     };
 
+    eprintln!("[perf] CallTree + annotations: {:?}", t.elapsed());
+
     if let Some(ref cb) = progress_fn { cb(0.73); }
 
+    let t = std::time::Instant::now();
     // consumed_seqs
     all_consumed_seqs.extend(extra_consumed);
     all_consumed_seqs.sort_unstable();
@@ -760,6 +768,9 @@ pub fn merge_all_chunks(
         merged
     };
 
+    eprintln!("[perf] MemAccessIndex merge: {:?} ({} addresses, {} records)",
+        t.elapsed(), mem_accesses.total_addresses(), mem_accesses.total_records());
+
     if let Some(ref cb) = progress_fn { cb(0.85); }
 
     // RegCheckpoints: merge all snapshots
@@ -774,6 +785,7 @@ pub fn merge_all_chunks(
         }
     };
 
+    let t = std::time::Instant::now();
     // StringIndex — 从 scan_chunk 收集的 string_writes 精确构建（0.85-0.97）
     // writes 已按 chunk 顺序排列（每个 chunk 内部是 seq 顺序），直接逐 chunk 处理
     // = 全局 seq 顺序，无需遍历 HashMap，无需排序，100% 正确
@@ -798,8 +810,15 @@ pub fn merge_all_chunks(
 
         if let Some(ref cb) = progress_fn { cb(0.97); }
 
+        let t2 = std::time::Instant::now();
         let mut si = sb.finish();
+        eprintln!("[perf] StringBuilder.finish(): {:?} ({} strings)", t2.elapsed(), si.strings.len());
+
+        let t3 = std::time::Instant::now();
         crate::taint::strings::StringBuilder::fill_xref_counts(&mut si, &mem_accesses);
+        eprintln!("[perf] fill_xref_counts: {:?}", t3.elapsed());
+
+        eprintln!("[perf] StringIndex total (build+finish+xref): {:?}", t.elapsed());
         si
     } else {
         Default::default()
