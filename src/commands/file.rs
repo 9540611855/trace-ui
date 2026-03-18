@@ -26,6 +26,7 @@ pub async fn create_session(
         let metadata = file.metadata().map_err(|e| format!("无法读取文件信息: {}", e))?;
         let file_size = metadata.len();
         let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(|e| format!("mmap 失败: {}", e))?;
+        let _ = mmap.advise(memmap2::Advice::WillNeed);
         Ok::<_, String>((mmap, file_size))
     })
     .await
