@@ -1084,6 +1084,9 @@ function App() {
                 sliceActive={slice.sliceActive}
                 sliceInfo={slice.sliceInfo}
                 sliceFromSpecs={slice.sliceFromSpecs}
+                isSlicing={slice.isSlicing}
+                sliceDuration={slice.sliceDuration}
+                sliceError={slice.sliceError}
                 stringsScanning={stringsScanningSessionId === activeSessionId}
               />
             </Panel>
@@ -1110,7 +1113,7 @@ function App() {
                 borderRadius: "50%",
                 animation: "spin 1s linear infinite",
               }} />
-              <span>污点分析中...</span>
+              <span>Analyzing...</span>
             </>
           )}
         </span>
@@ -1126,13 +1129,13 @@ function App() {
             setTaintDialogSeq(null);
             try {
               await slice.runSlice(specs, startSeq, endSeq, sourceSeq, dataOnly);
-              showToast("污点分析完成");
+              showToast("Taint analysis completed");
               // 跳转到污点源行
               scrollAlignRef.current = "end";
               setScrollTrigger(c => c + 1);
               navigationStore.navigate(sourceSeq);
             } catch (e) {
-              showToast(`污点分析失败: ${e}`, 5000);
+              showToast(`Taint analysis failed: ${e}`, 5000);
             }
           }}
           onClose={() => setTaintDialogSeq(null)}
