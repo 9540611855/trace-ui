@@ -195,13 +195,13 @@ export default function SearchResultList({
       }}>
         <span style={{ width: 48, flexShrink: 0 }}></span>
         <span style={{ width: rwCol.width, flexShrink: 0 }}>R/W</span>
-        <div onMouseDown={rwCol.onMouseDown} style={HANDLE_STYLE} />
+        <div onMouseDown={rwCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
         <span style={{ width: seqCol.width, flexShrink: 0 }}>#</span>
-        <div onMouseDown={seqCol.onMouseDown} style={HANDLE_STYLE} />
+        <div onMouseDown={seqCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
         <span style={{ width: addrCol.width, flexShrink: 0 }}>Address</span>
-        <div onMouseDown={addrCol.onMouseDown} style={HANDLE_STYLE} />
+        <div onMouseDown={addrCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
         <span style={{ flex: 1 }}>Disassembly</span>
-        <div onMouseDown={changesCol.onMouseDown} style={HANDLE_STYLE} />
+        <div onMouseDown={changesCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
         <span style={{ width: changesCol.width, flexShrink: 0 }}>Changes</span>
         <span style={{ width: MINIMAP_WIDTH + 12, flexShrink: 0 }}></span>
       </div>

@@ -81,11 +81,11 @@ export default function StringXRefsPanel() {
         fontFamily: "var(--font-mono)",
       }}>
         <span style={{ width: seqCol.width, flexShrink: 0 }}>Seq</span>
-        <div onMouseDown={seqCol.onMouseDown} style={HANDLE_STYLE} />
+        <div onMouseDown={seqCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
         <span style={{ width: rwCol.width, flexShrink: 0 }}>R/W</span>
-        <div onMouseDown={rwCol.onMouseDown} style={HANDLE_STYLE} />
+        <div onMouseDown={rwCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
         <span style={{ width: addrCol.width, flexShrink: 0 }}>Address</span>
-        <div onMouseDown={addrCol.onMouseDown} style={HANDLE_STYLE} />
+        <div onMouseDown={addrCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
         <span style={{ flex: 1 }}>Disasm</span>
       </div>
 

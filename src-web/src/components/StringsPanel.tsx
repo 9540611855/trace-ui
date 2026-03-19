@@ -354,15 +354,15 @@ export default function StringsPanel({ sessionId, isPhase2Ready, onJumpToSeq, st
         fontSize: "var(--font-size-sm)", color: "var(--text-secondary)", flexShrink: 0,
       }}>
         <span style={{ width: seqCol.width, flexShrink: 0 }}>Seq</span>
-        <div onMouseDown={seqCol.onMouseDown} style={HANDLE_STYLE} />
+        <div onMouseDown={seqCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
         <span style={{ width: addrCol.width, flexShrink: 0 }}>Address</span>
-        <div onMouseDown={addrCol.onMouseDown} style={HANDLE_STYLE} />
+        <div onMouseDown={addrCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
         <span style={{ flex: 1 }}>Content</span>
-        <div onMouseDown={encCol.onMouseDown} style={HANDLE_STYLE} />
+        <div onMouseDown={encCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
         <span style={{ width: encCol.width, flexShrink: 0 }}>Enc</span>
-        <div onMouseDown={lenCol.onMouseDown} style={HANDLE_STYLE} />
+        <div onMouseDown={lenCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
         <span style={{ width: lenCol.width, flexShrink: 0 }}>Len</span>
-        <div onMouseDown={xrefsCol.onMouseDown} style={HANDLE_STYLE} />
+        <div onMouseDown={xrefsCol.onMouseDown} style={HANDLE_STYLE}><div style={{ width: 1, height: "100%", background: "var(--border-color)" }} /></div>
         <span style={{ width: xrefsCol.width, flexShrink: 0 }}>XRefs</span>
       </div>
 
