@@ -14,6 +14,8 @@ interface SessionSliceState {
   sliceEndSeq?: number;
   sliceSourceSeq?: number;
   sliceDataOnly?: boolean;
+  sliceDuration: number | null;
+  sliceError: string | null;
 }
 
 function defaultState(): SessionSliceState {
@@ -26,6 +28,8 @@ function defaultState(): SessionSliceState {
     sliceStartSeq: undefined,
     sliceEndSeq: undefined,
     sliceSourceSeq: undefined,
+    sliceDuration: null,
+    sliceError: null,
   };
 }
 
@@ -74,6 +78,7 @@ export function useSliceState(sessionId: string | null) {
   const runSlice = useCallback(async (fromSpecs: string[], startSeq?: number, endSeq?: number, sourceSeq?: number, dataOnly?: boolean): Promise<SliceResult | undefined> => {
     if (!sessionId || fromSpecs.length === 0) return undefined;
     setIsSlicing(true);
+    const startTime = performance.now();
     try {
       const result = await invoke<SliceResult>("run_slice", {
         sessionId,
@@ -94,10 +99,13 @@ export function useSliceState(sessionId: string | null) {
         sliceEndSeq: endSeq,
         sliceSourceSeq: sourceSeq,
         sliceDataOnly: dataOnly,
+        sliceDuration: performance.now() - startTime,
+        sliceError: null,
       });
       return result;
     } catch (e) {
       console.error("run_slice failed:", e);
+      updateState(sessionId, { sliceError: String(e), sliceDuration: null });
       throw e;
     } finally {
       setIsSlicing(false);
@@ -172,6 +180,8 @@ export function useSliceState(sessionId: string | null) {
     sliceEndSeq: currentState.sliceEndSeq,
     sliceSourceSeq: currentState.sliceSourceSeq,
     sliceDataOnly: currentState.sliceDataOnly,
+    sliceDuration: currentState.sliceDuration,
+    sliceError: currentState.sliceError,
     runSlice,
     clearSlice,
     getSliceStatus,

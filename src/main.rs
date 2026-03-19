@@ -2,6 +2,7 @@
 
 mod cache;
 mod commands;
+mod flat;
 mod taint;
 mod line_index;
 mod phase2;

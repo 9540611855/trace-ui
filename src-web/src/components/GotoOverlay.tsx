@@ -181,7 +181,6 @@ export default function GotoOverlay({ onJumpToSeq, onClose, sessionId, totalLine
         borderRadius: 6,
         boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
         display: "flex", flexDirection: "column",
-        overflow: "hidden",
       }}>
         {/* 输入框 */}
         <div ref={inputWrapperRef} style={{ padding: "10px 12px 6px", flexShrink: 0, position: "relative" }}>
@@ -233,6 +232,16 @@ export default function GotoOverlay({ onJumpToSeq, onClose, sessionId, totalLine
                   onMouseEnter={e => (e.currentTarget.style.background = "var(--bg-selected)")}
                   onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                   onClick={() => {
+                    const trimmedItem = item.trim();
+                    if (!isHexAddress(trimmedItem)) {
+                      // 行号 → 直接跳转
+                      const lineNum = parseInt(trimmedItem, 10);
+                      if (!isNaN(lineNum) && lineNum >= 1 && lineNum <= totalLines) {
+                        jumpAndClose(lineNum - 1);
+                        return;
+                      }
+                    }
+                    // 地址 → 填入输入框触发搜索
                     setInput(item);
                     setShowGotoHistory(false);
                   }}

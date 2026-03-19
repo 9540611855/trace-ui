@@ -9,6 +9,7 @@ export interface Preferences {
   showHiddenIndicators: boolean;
   cacheDir: string; // empty string = use default path
   scanStringsOnBuild: boolean;
+  confirmTaintRestore: boolean;
 }
 
 export interface TaintConfig {
@@ -37,6 +38,7 @@ const DEFAULTS: Preferences = {
   showHiddenIndicators: true,
   cacheDir: "",
   scanStringsOnBuild: true,
+  confirmTaintRestore: true,
 };
 
 function load(): Preferences {

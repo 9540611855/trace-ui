@@ -202,6 +202,25 @@ export default function PreferencesDialog({ preferences, onSave, onClose, onClea
                 <div style={{ fontSize: 10, color: "var(--text-secondary)", lineHeight: 1.4, marginTop: -6 }}>
                   When disabled, strings are not extracted during startup indexing. You can manually scan from Analysis → Scan Strings.
                 </div>
+
+                <div style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 600, marginTop: 8 }}>
+                  Taint Analysis
+                </div>
+                <label style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  fontSize: 12, color: "var(--text-primary)", cursor: "pointer",
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={local.confirmTaintRestore}
+                    onChange={(e) => setLocal(prev => ({ ...prev, confirmTaintRestore: e.target.checked }))}
+                    style={{ accentColor: "var(--btn-primary)" }}
+                  />
+                  Confirm before restoring taint analysis state
+                </label>
+                <div style={{ fontSize: 10, color: "var(--text-secondary)", lineHeight: 1.4, marginTop: -6 }}>
+                  When enabled, a confirmation dialog will be shown before restoring the previous taint analysis state on file reopen. Useful for large traces where re-analysis may take a long time.
+                </div>
               </div>
             )}
 

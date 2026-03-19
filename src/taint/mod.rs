@@ -9,13 +9,16 @@ pub mod call_tree;
 pub mod mem_access;
 pub mod reg_checkpoint;
 pub mod strings;
+pub mod parallel_types;
+pub mod chunk_scan;
+pub mod merge;
+pub mod parallel;
 
 use memchr::memchr;
 use rustc_hash::FxHashMap;
 
 use crate::line_index::LineIndexBuilder;
 use crate::phase2;
-use crate::state::Phase2State;
 use call_tree::CallTreeBuilder;
 use insn_class::InsnClass;
 use mem_access::{MemAccessIndex, MemAccessRecord, MemRw};
@@ -27,9 +30,17 @@ use scanner::{
 };
 use types::RegId;
 
-pub type ProgressFn = Box<dyn Fn(usize, usize) + Send>;
+pub type ProgressFn = Box<dyn Fn(usize, usize) + Send + Sync>;
 
 const CHECKPOINT_INTERVAL: u32 = 1000;
+
+/// Phase 2 索引数据（CallTree + MemAccessIndex + RegCheckpoints + StringIndex）
+pub struct Phase2State {
+    pub call_tree: call_tree::CallTree,
+    pub mem_accesses: mem_access::MemAccessIndex,
+    pub reg_checkpoints: reg_checkpoint::RegCheckpoints,
+    pub string_index: strings::StringIndex,
+}
 
 /// scan_unified 的返回结果
 pub struct ScanResult {
@@ -87,7 +98,7 @@ pub fn scan_unified(
         reg_last_def: RegLastDef::new(),
         mem_last_def: scanner::MemLastDef::default(),
         last_cond_branch: None,
-        deps: scanner::CompactDeps::with_capacity(line_count_est, line_count_est * 2),
+        deps: scanner::DepsStorage::single(scanner::CompactDeps::with_capacity(line_count_est, line_count_est * 2)),
         line_count: 0,
         parsed_count: 0,
         mem_op_count: 0,
@@ -421,14 +432,20 @@ pub fn scan_unified(
 
         // Step 4: Update regLastDef
         if class == InsnClass::LoadPair {
-            // LoadPair: tag half1 (no tag), half2 (PAIR_HALF2_BIT), writeback base (PAIR_SHARED_BIT)
-            if defs.len() >= 2 {
-                state.reg_last_def.insert(defs[0], i);
-                state.reg_last_def.insert(defs[1], i | PAIR_HALF2_BIT);
+            // After SIMD expansion, defs may be [rt1_lo, rt1_hi, rt2_lo, rt2_hi, base?]
+            // or [rt1, rt2, base?] for scalar. Split data defs at midpoint.
+            let has_base_wb = line.writeback && line.base_reg.is_some();
+            let data_defs = if has_base_wb { &defs[..defs.len() - 1] } else { &defs[..] };
+            let mid = data_defs.len() / 2;
+
+            for r in &data_defs[..mid] {
+                state.reg_last_def.insert(*r, i); // half1: no tag
             }
-            // writeback base is the 3rd DEF (if present)
-            if defs.len() >= 3 {
-                state.reg_last_def.insert(defs[2], i | PAIR_SHARED_BIT);
+            for r in &data_defs[mid..] {
+                state.reg_last_def.insert(*r, i | PAIR_HALF2_BIT); // half2
+            }
+            if has_base_wb {
+                state.reg_last_def.insert(*defs.last().unwrap(), i | PAIR_SHARED_BIT);
             }
         } else if class == InsnClass::StorePair {
             // StorePair: writeback base is the only DEF (if present)
@@ -521,16 +538,57 @@ pub fn scan_unified(
                 MemRw::Read
             };
             let insn_addr = phase2::extract_insn_addr(raw_line);
-            mem_idx.add(
-                mem_op.abs,
-                MemAccessRecord {
-                    seq: i,
-                    insn_addr,
-                    rw,
-                    data: mem_op.value.unwrap_or(0),
-                    size: mem_op.elem_width,
-                },
-            );
+
+            if mem_op.elem_width <= 8 {
+                // Scalar 路径
+                mem_idx.add(
+                    mem_op.abs,
+                    MemAccessRecord {
+                        seq: i,
+                        insn_addr,
+                        rw,
+                        data: mem_op.value.unwrap_or(0),
+                        size: mem_op.elem_width,
+                    },
+                );
+
+                // Pair 指令：在 abs + elem_width 处创建第二条记录
+                if let Some(val2) = mem_op.value2 {
+                    mem_idx.add(
+                        mem_op.abs + mem_op.elem_width as u64,
+                        MemAccessRecord {
+                            seq: i,
+                            insn_addr,
+                            rw,
+                            data: val2,
+                            size: mem_op.elem_width,
+                        },
+                    );
+                }
+            } else if mem_op.elem_width == 16 {
+                // 128-bit: 拆为两条 size=8 的记录
+                if let Some(lo) = mem_op.value_lo {
+                    mem_idx.add(mem_op.abs, MemAccessRecord {
+                        seq: i, insn_addr, rw, data: lo, size: 8,
+                    });
+                }
+                if let Some(hi) = mem_op.value_hi {
+                    mem_idx.add(mem_op.abs + 8, MemAccessRecord {
+                        seq: i, insn_addr, rw, data: hi, size: 8,
+                    });
+                }
+                // Pair 128-bit: 第二个寄存器
+                if let Some(lo2) = mem_op.value2_lo {
+                    mem_idx.add(mem_op.abs + 16, MemAccessRecord {
+                        seq: i, insn_addr, rw, data: lo2, size: 8,
+                    });
+                }
+                if let Some(hi2) = mem_op.value2_hi {
+                    mem_idx.add(mem_op.abs + 24, MemAccessRecord {
+                        seq: i, insn_addr, rw, data: hi2, size: 8,
+                    });
+                }
+            }
 
             // ── Phase2: 字符串提取 ──
             if let Some(ref mut sb) = string_builder {

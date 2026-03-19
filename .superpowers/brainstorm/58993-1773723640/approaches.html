@@ -1,0 +1,142 @@
+<h2>反编译功能：三种实现方案</h2>
+<p class="subtitle">基于需求总结：本地模式匹配引擎 + LLM 增强 + 三栏布局 + CallTree 函数边界</p>
+
+<div class="section">
+  <h3>需求回顾</h3>
+  <ul style="color:#ccc;line-height:1.8;font-size:14px">
+    <li>数据来源：Frida Stalker / unidbg trace，不依赖原始 SO 文件</li>
+    <li>布局：右侧新增反编译栏，支持浮出/关闭</li>
+    <li>函数边界：CallTree（BL/BLR/RET），支持切换同函数不同调用实例</li>
+    <li>本地引擎：尽量覆盖完整 ARM64 指令集</li>
+    <li>LLM 增强：用户自配 API Key（OpenAI/Claude/Ollama 等）</li>
+  </ul>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>方案 A：自研 Rust 提升引擎（推荐）</h3>
+      <p>在 Rust 后端实现一个 ARM64 → 伪代码的提升引擎（lifter），直接从 trace 的反汇编文本解析指令语义。</p>
+
+      <div style="margin:12px 0;padding:12px;background:#1a1a2e;border-radius:6px;font-size:13px">
+        <div style="color:#a8e6a1;margin-bottom:8px;font-weight:bold">核心流程</div>
+        <div style="color:#ccc;line-height:1.8">
+          1. <span style="color:#a6d9ff">指令解析</span> — 复用现有 taint/parser.rs，扩展为完整的指令语义模型<br>
+          2. <span style="color:#ffb5d8">中间表示(IR)</span> — 将 ARM64 指令转为 SSA 形式的 IR（赋值、load/store、分支、调用）<br>
+          3. <span style="color:#ffd700">优化 Pass</span> — 死代码消除、表达式折叠、条件分支→if/else、循环检测<br>
+          4. <span style="color:#d4d4d4">代码生成</span> — IR → C 风格伪代码文本，附带地址→行号映射
+        </div>
+      </div>
+
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>优势</h4>
+          <ul>
+            <li>性能最好，纯 Rust 毫秒级响应</li>
+            <li>复用现有 parser/taint 大量代码</li>
+            <li>可利用 trace 的运行时数据（真实寄存器值、内存内容）生成带注释的伪代码</li>
+            <li>不依赖外部工具，零部署成本</li>
+            <li>地址映射精确（每条 IR 追踪来源指令）</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>挑战</h4>
+          <ul>
+            <li>工程量最大（需实现 IR + 优化 Pass + 代码生成）</li>
+            <li>ARM64 指令集庞大（~500+ 指令），完整覆盖需持续迭代</li>
+            <li>缺少未执行分支，伪代码不完整（LLM 可补偿）</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>方案 B：Keystone 重汇编 + Ghidra P-Code</h3>
+      <p>用 Keystone 汇编器将反汇编文本重新编码为机器码字节，构造一个"虚拟 ELF"，然后调用 Ghidra 的 Sleigh/P-Code 引擎反编译。</p>
+
+      <div style="margin:12px 0;padding:12px;background:#1a1a2e;border-radius:6px;font-size:13px">
+        <div style="color:#a8e6a1;margin-bottom:8px;font-weight:bold">核心流程</div>
+        <div style="color:#ccc;line-height:1.8">
+          1. <span style="color:#a6d9ff">重汇编</span> — Keystone 将反汇编文本 → ARM64 机器码字节<br>
+          2. <span style="color:#ffb5d8">构造虚拟 ELF</span> — 按 SO 偏移地址排列字节，生成最小 ELF<br>
+          3. <span style="color:#ffd700">Ghidra Headless</span> — 调用 analyzeHeadless 反编译虚拟 ELF<br>
+          4. <span style="color:#d4d4d4">结果解析</span> — 提取伪代码 + 地址映射，缓存到 bincode
+        </div>
+      </div>
+
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>优势</h4>
+          <ul>
+            <li>Ghidra 反编译质量成熟</li>
+            <li>ARM64 指令覆盖率高（Ghidra 的 Sleigh 定义完整）</li>
+            <li>不需要原始 SO——从 trace 重建字节</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>挑战</h4>
+          <ul>
+            <li>重汇编可能丢失信息（PC 相对地址、重定位需手动修复）</li>
+            <li>虚拟 ELF 只有执行过的指令，函数体不完整，Ghidra CFG 分析会受影响</li>
+            <li>依赖 Ghidra + JVM，部署体积大（~500MB+）</li>
+            <li>Headless 分析慢（秒级到分钟级）</li>
+            <li>地址映射需要额外处理（Ghidra 行号 → trace seq）</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>方案 C：Capstone + 轻量 IR 混合（折中）</h3>
+      <p>用 Capstone 反汇编库解析指令语义（而非自己写 parser），得到结构化指令信息后，用轻量级 IR 做提升。</p>
+
+      <div style="margin:12px 0;padding:12px;background:#1a1a2e;border-radius:6px;font-size:13px">
+        <div style="color:#a8e6a1;margin-bottom:8px;font-weight:bold">核心流程</div>
+        <div style="color:#ccc;line-height:1.8">
+          1. <span style="color:#a6d9ff">Keystone 重汇编</span> — 反汇编文本 → 4 字节机器码<br>
+          2. <span style="color:#ffb5d8">Capstone 解码</span> — 机器码 → 结构化指令（操作数、读写寄存器、类型）<br>
+          3. <span style="color:#ffd700">轻量 IR + 优化</span> — 类似方案 A 但 Capstone 省去手写 parser<br>
+          4. <span style="color:#d4d4d4">代码生成</span> — IR → C 风格伪代码
+        </div>
+      </div>
+
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>优势</h4>
+          <ul>
+            <li>Capstone 的指令语义解析比手写更完整更可靠</li>
+            <li>不依赖 JVM，Capstone 是轻量 C 库（~1MB）</li>
+            <li>性能接近方案 A</li>
+            <li>指令覆盖率高（Capstone 支持完整 ARM64）</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>挑战</h4>
+          <ul>
+            <li>多了 Keystone→Capstone 的中间步骤（反汇编→机器码→再解码）</li>
+            <li>Keystone 重汇编仍有 PC 相对地址问题</li>
+            <li>需引入 C 库的 Rust binding（capstone-rs / keystone-rs）</li>
+            <li>IR 和代码生成仍需自研</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;padding:16px;background:#1a2a1a;border:1px solid #3a5a3a;border-radius:8px">
+  <h3 style="color:#a8e6a1">我的推荐：方案 A</h3>
+  <p style="color:#ccc;line-height:1.8">
+    理由：你的项目已经有了优秀的 ARM64 指令 parser（taint/parser.rs + taint/types.rs，2000+ 行）和指令分类（insn_class.rs）。
+    在此基础上扩展 IR 和代码生成，工程量比从零开始小很多。而且 trace 场景下最大的优势——<strong style="color:#ffd700">运行时数据</strong>——只有自研引擎才能充分利用
+    （比如直接在伪代码里标注 <code style="color:#a6d9ff">v0 = *ptr  /* =0x16e80, ptr=0x41688658 */</code>）。
+    Ghidra/Capstone 路线反而增加了不必要的依赖，且无法利用运行时信息。
+  </p>
+</div>

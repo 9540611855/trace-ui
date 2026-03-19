@@ -2,6 +2,26 @@ use crate::taint::insn_class::InsnClass;
 use crate::taint::types::{Operand, ParsedLine, RegId};
 use smallvec::SmallVec;
 
+/// Expand a SIMD lo-lane RegId to both lo+hi lanes (128-bit full operation).
+/// Non-SIMD registers pass through unchanged.
+fn expand_simd_full(vec: &mut SmallVec<[RegId; 4]>, reg: RegId) {
+    vec.push(reg);
+    if let Some(hi) = reg.simd_hi() {
+        vec.push(hi);
+    }
+}
+
+/// Determine which lane (lo or hi) a lane_index maps to given elem_width.
+/// byte_offset = lane_index * elem_width; >= 8 means hi lane.
+fn simd_lane_reg(reg: RegId, lane_index: u8, elem_width: u8) -> RegId {
+    let byte_offset = lane_index as u32 * elem_width as u32;
+    if byte_offset >= 8 {
+        reg.simd_hi().unwrap_or(reg)
+    } else {
+        reg
+    }
+}
+
 /// Determine the DEF (written) and USE (read) registers for a parsed instruction.
 ///
 /// This function explicitly matches ALL 42 InsnClass variants with no wildcard `_ =>`
@@ -20,8 +40,7 @@ pub fn determine_def_use(
     match class {
         // =====================================================================
         // Standard pure-write pattern: DEF=ops[0], USE=ops[1..]
-        // Covers: ALU, Multiply, Move, Bitfield, Extend, FloatArith,
-        //         SimdArith, SimdMisc, SimdMove
+        // Covers: ALU, Multiply, Move, Bitfield, Extend, FloatArith
         // =====================================================================
         InsnClass::AluReg
         | InsnClass::AluImm
@@ -30,14 +49,27 @@ pub fn determine_def_use(
         | InsnClass::Move
         | InsnClass::Bitfield
         | InsnClass::Extend
-        | InsnClass::FloatArith
-        | InsnClass::SimdArith
-        | InsnClass::SimdMisc
-        | InsnClass::SimdMove => {
+        | InsnClass::FloatArith => {
             if let Some(rd) = first_reg_non_zero(ops) {
                 defs.push(rd);
             }
             collect_uses_from(ops, 1, &mut uses);
+        }
+
+        // =====================================================================
+        // SIMD pure-write: DEF=lo+hi of ops[0], USE=lo+hi of ops[1..]
+        // =====================================================================
+        InsnClass::SimdArith
+        | InsnClass::SimdMisc
+        | InsnClass::SimdMove => {
+            if let Some(rd) = first_reg_non_zero(ops) {
+                expand_simd_full(&mut defs, rd);
+            }
+            for op in ops.iter().skip(1) {
+                if let Some(r) = op.as_reg().filter(|r| !r.is_zero()) {
+                    expand_simd_full(&mut uses, r);
+                }
+            }
         }
 
         // =====================================================================
@@ -99,15 +131,43 @@ pub fn determine_def_use(
 
         // =====================================================================
         // D: ScalarRMW — movk, bfi, bfxil, bfc
-        // M: SimdRMW — ins, bsl, bit, bif, mla, mls, fmov Vd.D[1]
         // DEF=Rd, USE=Rd(old) + ops[1..]
         // =====================================================================
-        InsnClass::ScalarRMW | InsnClass::SimdRMW => {
+        InsnClass::ScalarRMW => {
             if let Some(rd) = first_reg_non_zero(ops) {
                 defs.push(rd);
                 uses.push(rd); // old value is a USE
             }
             collect_uses_from(ops, 1, &mut uses);
+        }
+
+        // =====================================================================
+        // M: SimdRMW — ins, bsl, bit, bif, mla, mls, fmov Vd.D[1]
+        // Lane or full 128-bit RMW with lo+hi expansion
+        // =====================================================================
+        InsnClass::SimdRMW => {
+            if let Some(rd) = first_reg_non_zero(ops) {
+                if let (Some(lane_idx), Some(ew)) = (line.lane_index, line.lane_elem_width) {
+                    // Lane operation (ins, fmov v.d[1]): only target lane
+                    let target = simd_lane_reg(rd, lane_idx, ew);
+                    defs.push(target);
+                    uses.push(target); // old value of target lane
+                } else {
+                    // Full 128-bit RMW (bsl, aese, sha256h, mla, etc.)
+                    expand_simd_full(&mut defs, rd);
+                    expand_simd_full(&mut uses, rd);
+                }
+            }
+            // Source operands: conservatively expand SIMD to lo+hi
+            for op in ops.iter().skip(1) {
+                if let Some(r) = op.as_reg().filter(|r| !r.is_zero()) {
+                    if r.is_simd_lo() {
+                        expand_simd_full(&mut uses, r);
+                    } else {
+                        uses.push(r);
+                    }
+                }
+            }
         }
 
         // =====================================================================
@@ -131,10 +191,13 @@ pub fn determine_def_use(
         // DEF=Rt1 + Rt2 [+ base if writeback], USE=base + mem
         // =====================================================================
         InsnClass::LoadPair => {
-            // First two operands are destinations
             for op in ops.iter().take(2) {
                 if let Some(r) = op.as_reg().filter(|r| !r.is_zero()) {
-                    defs.push(r);
+                    if r.is_simd_lo() {
+                        expand_simd_full(&mut defs, r);
+                    } else {
+                        defs.push(r);
+                    }
                 }
             }
             collect_uses_from(ops, 2, &mut uses);
@@ -147,12 +210,53 @@ pub fn determine_def_use(
 
         // =====================================================================
         // H: StoreReg — str, strb, strh, stlr, etc.
-        // H: StorePair — stp, stnp
-        // M: SimdStore — st1, st2, str Dt/Qt, etc.
         // DEF=[base if writeback], USE=all operands
         // =====================================================================
-        InsnClass::StoreReg | InsnClass::StorePair | InsnClass::SimdStore => {
+        InsnClass::StoreReg => {
             collect_uses_from(ops, 0, &mut uses);
+            if line.writeback {
+                if let Some(base) = line.base_reg {
+                    defs.push(base);
+                }
+            }
+        }
+
+        // =====================================================================
+        // H: StorePair — stp, stnp
+        // Data operands may be SIMD → expand lo+hi
+        // =====================================================================
+        InsnClass::StorePair => {
+            // Data operands may be SIMD → expand lo+hi
+            for op in ops.iter() {
+                if let Some(r) = op.as_reg().filter(|r| !r.is_zero()) {
+                    if r.is_simd_lo() {
+                        expand_simd_full(&mut uses, r);
+                    } else {
+                        uses.push(r);
+                    }
+                }
+            }
+            if line.writeback {
+                if let Some(base) = line.base_reg {
+                    defs.push(base);
+                }
+            }
+        }
+
+        // =====================================================================
+        // M: SimdStore — st1, st2, str Dt/Qt, etc.
+        // SIMD data operands expanded to lo+hi
+        // =====================================================================
+        InsnClass::SimdStore => {
+            for op in ops.iter() {
+                if let Some(r) = op.as_reg().filter(|r| !r.is_zero()) {
+                    if r.is_simd_lo() {
+                        expand_simd_full(&mut uses, r);
+                    } else {
+                        uses.push(r);
+                    }
+                }
+            }
             if line.writeback {
                 if let Some(base) = line.base_reg {
                     defs.push(base);
@@ -346,7 +450,7 @@ pub fn determine_def_use(
                         if r == base {
                             break;
                         }
-                        defs.push(r);
+                        expand_simd_full(&mut defs, r);
                     }
                 }
                 // base_reg 作为 USE
@@ -354,7 +458,7 @@ pub fn determine_def_use(
             } else {
                 // 回退：无 base_reg 时，仅第一个寄存器为 DEF，其余为 USE
                 if let Some(vt) = ops.first().and_then(|o| o.as_reg()) {
-                    defs.push(vt);
+                    expand_simd_full(&mut defs, vt);
                 }
                 collect_uses_from(ops, 1, &mut uses);
             }
@@ -372,8 +476,15 @@ pub fn determine_def_use(
         // =====================================================================
         InsnClass::SimdLaneLoad => {
             if let Some(vt) = ops.first().and_then(|o| o.as_reg()) {
-                defs.push(vt);
-                uses.push(vt); // old value is a USE (read-modify-write)
+                if let (Some(lane_idx), Some(ew)) = (line.lane_index, line.lane_elem_width) {
+                    let target = simd_lane_reg(vt, lane_idx, ew);
+                    defs.push(target);
+                    uses.push(target); // old value of target lane (RMW)
+                } else {
+                    // Fallback: conservative full register RMW
+                    expand_simd_full(&mut defs, vt);
+                    expand_simd_full(&mut uses, vt);
+                }
             }
             collect_uses_from(ops, 1, &mut uses);
             if line.writeback {
@@ -421,6 +532,7 @@ mod tests {
             base_reg: None,
             writeback: false,
             lane_index: None,
+            lane_elem_width: None,
             pre_arrow_regs: None,
             post_arrow_regs: None,
         }
@@ -438,6 +550,7 @@ mod tests {
             base_reg: Some(base),
             writeback: true,
             lane_index: None,
+            lane_elem_width: None,
             pre_arrow_regs: None,
             post_arrow_regs: None,
         }
@@ -948,17 +1061,23 @@ mod tests {
             Operand::Reg(RegId::V2),
         ]);
         let (defs, uses) = determine_def_use(InsnClass::SimdArith, &line);
-        assert_eq!(defs.as_slice(), &[RegId::V0]);
-        assert_eq!(uses.as_slice(), &[RegId::V1, RegId::V2]);
+        assert_eq!(defs.as_slice(), &[RegId::V0, RegId::V0_HI]);
+        assert_eq!(
+            uses.as_slice(),
+            &[RegId::V1, RegId::V1_HI, RegId::V2, RegId::V2_HI]
+        );
     }
 
     #[test]
     fn test_simd_rmw() {
-        // ins Vd.B[lane], Vn.B[lane] — Vd is both DEF and USE
+        // bsl Vd, Vn, Vm — full 128-bit RMW (no lane info)
         let line = make_line(&[Operand::Reg(RegId::V0), Operand::Reg(RegId::V1)]);
         let (defs, uses) = determine_def_use(InsnClass::SimdRMW, &line);
-        assert_eq!(defs.as_slice(), &[RegId::V0]);
-        assert_eq!(uses.as_slice(), &[RegId::V0, RegId::V1]); // V0 old + V1 source
+        assert_eq!(defs.as_slice(), &[RegId::V0, RegId::V0_HI]);
+        assert_eq!(
+            uses.as_slice(),
+            &[RegId::V0, RegId::V0_HI, RegId::V1, RegId::V1_HI]
+        ); // V0 lo+hi old + V1 lo+hi source
     }
 
     #[test]
@@ -966,7 +1085,7 @@ mod tests {
         // movi Vd.4S, #imm
         let line = make_line(&[Operand::Reg(RegId::V0), Operand::Imm(0)]);
         let (defs, uses) = determine_def_use(InsnClass::SimdMove, &line);
-        assert_eq!(defs.as_slice(), &[RegId::V0]);
+        assert_eq!(defs.as_slice(), &[RegId::V0, RegId::V0_HI]);
         assert!(uses.is_empty());
     }
 
@@ -974,7 +1093,7 @@ mod tests {
     fn test_simd_load() {
         let line = make_line(&[Operand::Reg(RegId::V0), Operand::Reg(RegId::X8)]);
         let (defs, uses) = determine_def_use(InsnClass::SimdLoad, &line);
-        assert_eq!(defs.as_slice(), &[RegId::V0]);
+        assert_eq!(defs.as_slice(), &[RegId::V0, RegId::V0_HI]);
         assert_eq!(uses.as_slice(), &[RegId::X8]);
     }
 
@@ -986,7 +1105,7 @@ mod tests {
             RegId::X20,
         );
         let (defs, uses) = determine_def_use(InsnClass::SimdLoad, &line);
-        assert_eq!(defs.as_slice(), &[RegId::V0, RegId::X20]); // V0 + writeback
+        assert_eq!(defs.as_slice(), &[RegId::V0, RegId::V0_HI, RegId::X20]); // V0 lo+hi + writeback
         assert_eq!(uses.as_slice(), &[RegId::X20]);
     }
 
@@ -1005,7 +1124,9 @@ mod tests {
         };
         let (defs, uses) = determine_def_use(InsnClass::SimdLoad, &line);
         assert!(defs.contains(&RegId::V0), "v0 should be DEF");
+        assert!(defs.contains(&RegId::V0_HI), "v0_hi should be DEF");
         assert!(defs.contains(&RegId::V1), "v1 should be DEF");
+        assert!(defs.contains(&RegId::V1_HI), "v1_hi should be DEF");
         assert!(
             !defs.contains(&RegId::X0),
             "x0 should not be DEF (no writeback)"
@@ -1031,17 +1152,23 @@ mod tests {
         };
         let (defs, uses) = determine_def_use(InsnClass::SimdLoad, &line);
         assert!(defs.contains(&RegId::V0), "v0 should be DEF");
+        assert!(defs.contains(&RegId::V0_HI), "v0_hi should be DEF");
         assert!(defs.contains(&RegId::V1), "v1 should be DEF");
+        assert!(defs.contains(&RegId::V1_HI), "v1_hi should be DEF");
         assert!(defs.contains(&RegId::X0), "x0 should be DEF (writeback)");
         assert!(uses.contains(&RegId::X0), "x0 should be USE");
     }
 
     #[test]
     fn test_simd_lane_load() {
+        // No lane_index/lane_elem_width → fallback to conservative full RMW
         let line = make_line(&[Operand::Reg(RegId::V0), Operand::Reg(RegId::X8)]);
         let (defs, uses) = determine_def_use(InsnClass::SimdLaneLoad, &line);
-        assert_eq!(defs.as_slice(), &[RegId::V0]);
-        assert_eq!(uses.as_slice(), &[RegId::V0, RegId::X8]); // V0 old + X8 base
+        assert_eq!(defs.as_slice(), &[RegId::V0, RegId::V0_HI]);
+        assert_eq!(
+            uses.as_slice(),
+            &[RegId::V0, RegId::V0_HI, RegId::X8]
+        ); // V0 lo+hi old + X8 base
     }
 
     #[test]
@@ -1051,8 +1178,14 @@ mod tests {
             RegId::X9,
         );
         let (defs, uses) = determine_def_use(InsnClass::SimdLaneLoad, &line);
-        assert_eq!(defs.as_slice(), &[RegId::V0, RegId::X9]); // V0 + writeback
-        assert_eq!(uses.as_slice(), &[RegId::V0, RegId::X9]); // V0 old + X9 base
+        assert_eq!(
+            defs.as_slice(),
+            &[RegId::V0, RegId::V0_HI, RegId::X9]
+        ); // V0 lo+hi + writeback
+        assert_eq!(
+            uses.as_slice(),
+            &[RegId::V0, RegId::V0_HI, RegId::X9]
+        ); // V0 lo+hi old + X9 base
     }
 
     #[test]
@@ -1060,7 +1193,7 @@ mod tests {
         let line = make_line(&[Operand::Reg(RegId::V0), Operand::Reg(RegId::X8)]);
         let (defs, uses) = determine_def_use(InsnClass::SimdStore, &line);
         assert!(defs.is_empty());
-        assert_eq!(uses.as_slice(), &[RegId::V0, RegId::X8]);
+        assert_eq!(uses.as_slice(), &[RegId::V0, RegId::V0_HI, RegId::X8]);
     }
 
     #[test]
@@ -1071,7 +1204,7 @@ mod tests {
         );
         let (defs, uses) = determine_def_use(InsnClass::SimdStore, &line);
         assert_eq!(defs.as_slice(), &[RegId::X8]); // writeback
-        assert_eq!(uses.as_slice(), &[RegId::V0, RegId::X8]);
+        assert_eq!(uses.as_slice(), &[RegId::V0, RegId::V0_HI, RegId::X8]);
     }
 
     // =========================================================================

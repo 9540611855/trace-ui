@@ -14,8 +14,8 @@ use crate::taint::types::*;
 ///
 /// Uses `u32::MAX` as sentinel for "no definition seen". Provides the same
 /// `.get()` / `.insert()` API as HashMap for drop-in replacement.
-/// 66 entries × 4 bytes = 264 bytes — fits in a few cache lines.
-#[derive(serde::Serialize, serde::Deserialize)]
+/// 98 entries × 4 bytes = 392 bytes — fits in a few cache lines.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct RegLastDef(#[serde(with = "big_array")] [u32; RegId::COUNT]);
 
 mod big_array {
@@ -58,6 +58,18 @@ impl RegLastDef {
 
     pub fn insert(&mut self, reg: RegId, line: u32) {
         self.0[reg.0 as usize] = line;
+    }
+
+    /// Get raw inner array (for merge phase).
+    #[allow(dead_code)]
+    pub(crate) fn inner(&self) -> &[u32; RegId::COUNT] {
+        &self.0
+    }
+
+    /// Get mutable raw inner array (for merge phase).
+    #[allow(dead_code)]
+    pub(crate) fn inner_mut(&mut self) -> &mut [u32; RegId::COUNT] {
+        &mut self.0
     }
 }
 
@@ -157,8 +169,8 @@ impl MemLastDef {
 /// - `offsets` 长度 = 行数 + 1（末尾哨兵）
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompactDeps {
-    offsets: Vec<u32>,
-    data: Vec<u32>,
+    pub(crate) offsets: Vec<u32>,
+    pub(crate) data: Vec<u32>,
 }
 
 impl CompactDeps {
@@ -239,6 +251,152 @@ impl CompactDeps {
     pub fn row_contains(&self, i: usize, val: &u32) -> bool {
         self.row(i).contains(val)
     }
+
+    /// Create from raw parts (for merge phase).
+    #[allow(dead_code)]
+    pub(crate) fn from_raw(offsets: Vec<u32>, data: Vec<u32>) -> Self {
+        Self { offsets, data }
+    }
+
+    /// Accessor for offsets slice (for flat conversion).
+    pub fn offsets_slice(&self) -> &[u32] {
+        &self.offsets
+    }
+
+    /// Accessor for data slice (for flat conversion).
+    pub fn data_slice(&self) -> &[u32] {
+        &self.data
+    }
+
+    /// Number of dependency edges for row i.
+    #[allow(dead_code)]
+    pub(crate) fn row_len(&self, i: usize) -> usize {
+        let start = self.offsets[i] as usize;
+        let end = if i + 1 < self.offsets.len() {
+            self.offsets[i + 1] as usize
+        } else {
+            self.data.len()
+        };
+        end - start
+    }
+}
+
+/// Storage for dependency graph — either a single CompactDeps (from single-threaded
+/// scan or legacy cache) or chunked format from parallel scan that avoids the
+/// expensive O(n) rebuild_compact_deps.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub enum DepsStorage {
+    /// Single merged CompactDeps (from single-threaded scan or cache).
+    Single(CompactDeps),
+    /// Chunked from parallel scan — keeps per-chunk CompactDeps as-is.
+    Chunked {
+        chunks: Vec<CompactDeps>,
+        chunk_start_lines: Vec<u32>,
+        /// Cross-chunk patch deps grouped by source line, sorted by line number.
+        /// Each entry is (global_line, deps_for_that_line).
+        patch_groups: Vec<(u32, Vec<u32>)>,
+    },
+}
+
+impl DepsStorage {
+    /// Get the base (intra-chunk) deps for a line.
+    #[inline]
+    pub fn row(&self, global_line: usize) -> &[u32] {
+        match self {
+            DepsStorage::Single(cd) => cd.row(global_line),
+            DepsStorage::Chunked { chunks, chunk_start_lines, .. } => {
+                let line = global_line as u32;
+                let chunk_idx = match chunk_start_lines.binary_search(&line) {
+                    Ok(i) => i,
+                    Err(i) => i.saturating_sub(1),
+                };
+                let local = global_line - chunk_start_lines[chunk_idx] as usize;
+                chunks[chunk_idx].row(local)
+            }
+        }
+    }
+
+    /// Get cross-chunk patch deps for a line. Returns empty slice if none.
+    #[inline]
+    pub fn patch_row(&self, global_line: usize) -> &[u32] {
+        match self {
+            DepsStorage::Single(_) => &[],
+            DepsStorage::Chunked { patch_groups, .. } => {
+                let line = global_line as u32;
+                match patch_groups.binary_search_by_key(&line, |&(l, _)| l) {
+                    Ok(idx) => &patch_groups[idx].1,
+                    Err(_) => &[],
+                }
+            }
+        }
+    }
+
+    /// Total dependency edge count.
+    pub fn total_deps(&self) -> usize {
+        match self {
+            DepsStorage::Single(cd) => cd.total_deps(),
+            DepsStorage::Chunked { chunks, patch_groups, .. } => {
+                let base: usize = chunks.iter().map(|c| c.total_deps()).sum();
+                let patches: usize = patch_groups.iter().map(|(_, v)| v.len()).sum();
+                base + patches
+            }
+        }
+    }
+
+    /// Number of rows (lines).
+    #[allow(dead_code)]
+    pub fn num_rows(&self) -> usize {
+        match self {
+            DepsStorage::Single(cd) => cd.num_rows(),
+            DepsStorage::Chunked { chunks, .. } => {
+                chunks.iter().map(|c| c.num_rows()).sum()
+            }
+        }
+    }
+
+    /// Whether there are no rows.
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            DepsStorage::Single(cd) => cd.is_empty(),
+            DepsStorage::Chunked { chunks, .. } => chunks.iter().all(|c| c.is_empty()),
+        }
+    }
+
+    /// Start a new row (only valid for Single variant, used during scan).
+    #[inline]
+    pub fn start_row(&mut self) {
+        match self {
+            DepsStorage::Single(cd) => cd.start_row(),
+            DepsStorage::Chunked { .. } => panic!("cannot start_row on Chunked DepsStorage"),
+        }
+    }
+
+    /// Push a unique dep to the current row (only valid for Single variant, used during scan).
+    #[inline]
+    pub fn push_unique(&mut self, val: u32) {
+        match self {
+            DepsStorage::Single(cd) => cd.push_unique(val),
+            DepsStorage::Chunked { .. } => panic!("cannot push_unique on Chunked DepsStorage"),
+        }
+    }
+
+    /// Check if a row contains a specific dep value (base + patches).
+    #[allow(dead_code)]
+    pub fn row_contains(&self, i: usize, val: &u32) -> bool {
+        self.row(i).contains(val) || self.patch_row(i).contains(val)
+    }
+
+    /// Check if a row has no deps (base + patches).
+    #[allow(dead_code)]
+    pub fn row_is_empty(&self, i: usize) -> bool {
+        self.row(i).is_empty() && self.patch_row(i).is_empty()
+    }
+
+    /// Wrap a CompactDeps as DepsStorage::Single.
+    pub fn single(cd: CompactDeps) -> Self {
+        DepsStorage::Single(cd)
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -246,7 +404,7 @@ pub struct ScanState {
     pub reg_last_def: RegLastDef,
     pub mem_last_def: MemLastDef,
     pub last_cond_branch: Option<u32>,
-    pub deps: CompactDeps,
+    pub deps: DepsStorage,
     pub line_count: u32,
     /// 成功解析的指令行数（parse_line 返回 Some 的次数）
     pub parsed_count: u32,
@@ -371,7 +529,7 @@ pub fn scan_pass1_bytes_with_progress(
         reg_last_def: RegLastDef::new(),
         mem_last_def: MemLastDef::default(),
         last_cond_branch: None,
-        deps: CompactDeps::with_capacity(line_count_est, line_count_est * 2),
+        deps: DepsStorage::single(CompactDeps::with_capacity(line_count_est, line_count_est * 2)),
         line_count: 0,
         parsed_count: 0,
         mem_op_count: 0,
@@ -663,14 +821,20 @@ pub fn scan_pass1_bytes_with_progress(
 
         // Step 4: Update regLastDef
         if class == InsnClass::LoadPair {
-            // LoadPair: tag half1 (no tag), half2 (PAIR_HALF2_BIT), writeback base (PAIR_SHARED_BIT)
-            if defs.len() >= 2 {
-                state.reg_last_def.insert(defs[0], i);
-                state.reg_last_def.insert(defs[1], i | PAIR_HALF2_BIT);
+            // After SIMD expansion, defs may be [rt1_lo, rt1_hi, rt2_lo, rt2_hi, base?]
+            // or [rt1, rt2, base?] for scalar. Split data defs at midpoint.
+            let has_base_wb = line.writeback && line.base_reg.is_some();
+            let data_defs = if has_base_wb { &defs[..defs.len() - 1] } else { &defs[..] };
+            let mid = data_defs.len() / 2;
+
+            for r in &data_defs[..mid] {
+                state.reg_last_def.insert(*r, i); // half1: no tag
             }
-            // writeback base is the 3rd DEF (if present)
-            if defs.len() >= 3 {
-                state.reg_last_def.insert(defs[2], i | PAIR_SHARED_BIT);
+            for r in &data_defs[mid..] {
+                state.reg_last_def.insert(*r, i | PAIR_HALF2_BIT); // half2
+            }
+            if has_base_wb {
+                state.reg_last_def.insert(*defs.last().unwrap(), i | PAIR_SHARED_BIT);
             }
         } else if class == InsnClass::StorePair {
             // StorePair: writeback base is the only DEF (if present)

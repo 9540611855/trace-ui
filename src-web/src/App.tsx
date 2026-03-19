@@ -15,6 +15,7 @@ import TabPanel from "./components/TabPanel";
 import FileTabBar from "./components/FileTabBar";
 import GotoOverlay from "./components/GotoOverlay";
 import TaintConfigDialog from "./components/TaintConfigDialog";
+import ConfirmDialog from "./components/ConfirmDialog";
 import ToastContainer, { useToast } from "./components/Toast";
 import { useTraceStore } from "./hooks/useTraceStore";
 import { useSliceState } from "./hooks/useSliceState";
@@ -416,18 +417,29 @@ function App() {
   const sliceRef = useRef(slice);
   sliceRef.current = slice;
 
+  // 待用户确认的污点恢复配置
+  const [pendingTaintRestore, setPendingTaintRestore] = useState<import("./hooks/usePreferences").TaintConfig | null>(null);
+
+  const doRestoreTaint = useCallback((config: import("./hooks/usePreferences").TaintConfig) => {
+    sliceRef.current.runSlice(config.fromSpecs, config.startSeq, config.endSeq, config.sourceSeq, config.dataOnly).then(() => {
+      if (config.filterMode) {
+        sliceRef.current.setSliceFilterMode(config.filterMode);
+      }
+    }).catch(e => console.error("Failed to restore taint state:", e));
+  }, []);
+
   // isPhase2Ready 变为 true 时，检查是否有待恢复的 taintConfig
   useEffect(() => {
     if (!activeSessionId || !isPhase2Ready || !filePath) return;
     const config = pendingTaintConfigs.current.get(filePath);
     if (!config) return;
     pendingTaintConfigs.current.delete(filePath);
-    sliceRef.current.runSlice(config.fromSpecs, config.startSeq, config.endSeq, config.sourceSeq, config.dataOnly).then(() => {
-      if (config.filterMode) {
-        sliceRef.current.setSliceFilterMode(config.filterMode);
-      }
-    }).catch(e => console.error("Failed to restore taint state:", e));
-  }, [activeSessionId, isPhase2Ready, filePath]);
+    if (preferences.confirmTaintRestore) {
+      setPendingTaintRestore(config);
+    } else {
+      doRestoreTaint(config);
+    }
+  }, [activeSessionId, isPhase2Ready, filePath, preferences.confirmTaintRestore, doRestoreTaint]);
 
   // isPhase2Ready 变为 true 时，获取 consumed_seqs（gumtrace 特殊行）
   const [consumedSeqs, setConsumedSeqs] = useState<number[]>([]);
@@ -523,13 +535,16 @@ function App() {
   }, [foldState.ensureSeqVisible]);
 
   // 搜索路由：Search 已浮动时转发，否则本地搜索
-  const handleSearch = useCallback((query: string) => {
+  const handleSearch = useCallback(async (query: string) => {
     if (floatedPanels.has("search")) {
       emit("action:trigger-search", { query });
     } else {
-      searchTrace(query);
+      const count = await searchTrace(query);
+      if (query.trim() && count === 0) {
+        showToast(`No results found for "${query}"`, { type: "info" });
+      }
     }
-  }, [searchTrace, floatedPanels]);
+  }, [searchTrace, floatedPanels, showToast]);
 
   const scanStrings = useCallback(async () => {
     if (!activeSessionId) return;
@@ -537,7 +552,7 @@ function App() {
     try {
       await invoke("scan_strings", { sessionId: activeSessionId });
       setHasStringIndexMap(prev => new Map(prev).set(activeSessionId, true));
-      showToast("Scan Strings 完成");
+      showToast("Scan Strings completed", { type: "success" });
     } catch (e) {
       console.warn("scan_strings:", e);
     } finally {
@@ -1103,6 +1118,9 @@ function App() {
                 sliceActive={slice.sliceActive}
                 sliceInfo={slice.sliceInfo}
                 sliceFromSpecs={slice.sliceFromSpecs}
+                isSlicing={slice.isSlicing}
+                sliceDuration={slice.sliceDuration}
+                sliceError={slice.sliceError}
                 stringsScanning={stringsScanningSessionId === activeSessionId}
               />
             </Panel>
@@ -1116,10 +1134,22 @@ function App() {
         borderTop: "1px solid var(--border-color)",
         fontSize: 11, color: "var(--text-secondary)",
       }}>
-        <span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {isLoaded && filePath
             ? `${filePath.split(/[/\\]/).pop()} — ${totalLines.toLocaleString()} lines`
             : ""}
+          {slice.isSlicing && (
+            <>
+              <span style={{
+                display: "inline-block", width: 12, height: 12,
+                border: "2px solid var(--border-color)",
+                borderTop: "2px solid var(--btn-primary)",
+                borderRadius: "50%",
+                animation: "spin 1s linear infinite",
+              }} />
+              <span>Analyzing...</span>
+            </>
+          )}
         </span>
         <StatusBarSelection />
       </div>
@@ -1131,11 +1161,16 @@ function App() {
           onExecute={async (specs, startSeq, endSeq, dataOnly) => {
             const sourceSeq = taintDialogSeq;
             setTaintDialogSeq(null);
-            await slice.runSlice(specs, startSeq, endSeq, sourceSeq, dataOnly);
-            // 跳转到污点源行
-            scrollAlignRef.current = "end";
-            setScrollTrigger(c => c + 1);
-            navigationStore.navigate(sourceSeq);
+            try {
+              await slice.runSlice(specs, startSeq, endSeq, sourceSeq, dataOnly);
+              showToast("Taint analysis completed", { type: "success" });
+              // 跳转到污点源行
+              scrollAlignRef.current = "end";
+              setScrollTrigger(c => c + 1);
+              navigationStore.navigate(sourceSeq);
+            } catch (e) {
+              showToast(`Taint analysis failed: ${e}`, { duration: 5000, type: "error" });
+            }
           }}
           onClose={() => setTaintDialogSeq(null)}
         />
@@ -1211,6 +1246,38 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+      {pendingTaintRestore && (
+        <ConfirmDialog
+          title="Restore Taint Analysis"
+          message={
+            <>
+              <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 12 }}>
+                A previous taint analysis state was found. Restore it?
+              </div>
+              <div style={{
+                fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.6,
+                background: "var(--bg-input)", borderRadius: 4, padding: "8px 12px", marginBottom: 16,
+              }}>
+                <div>Source: {pendingTaintRestore.fromSpecs.join(", ")}</div>
+                {pendingTaintRestore.startSeq != null && (
+                  <div>Start: {pendingTaintRestore.startSeq}</div>
+                )}
+                {pendingTaintRestore.endSeq != null && (
+                  <div>End: {pendingTaintRestore.endSeq}</div>
+                )}
+                {pendingTaintRestore.dataOnly && <div>Data dependencies only</div>}
+              </div>
+            </>
+          }
+          confirmText="Restore"
+          cancelText="Skip"
+          onConfirm={() => {
+            doRestoreTaint(pendingTaintRestore);
+            setPendingTaintRestore(null);
+          }}
+          onCancel={() => setPendingTaintRestore(null)}
+        />
       )}
       <ToastContainer toasts={toasts} />
     </div>

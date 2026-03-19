@@ -26,6 +26,7 @@ pub async fn create_session(
         let metadata = file.metadata().map_err(|e| format!("无法读取文件信息: {}", e))?;
         let file_size = metadata.len();
         let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(|e| format!("mmap 失败: {}", e))?;
+        let _ = mmap.advise(memmap2::Advice::WillNeed);
         Ok::<_, String>((mmap, file_size))
     })
     .await
@@ -39,17 +40,23 @@ pub async fn create_session(
         let mut sessions = state.sessions.write().map_err(|e| format!("锁获取失败: {}", e))?;
         sessions.insert(session_id.clone(), SessionState {
             mmap: Arc::new(mmap),
-            line_index: None,
             file_path: path,
             total_lines: total_lines_estimate,
             file_size,
-            phase2: None,
-            scan_state: None,
+            trace_format: TraceFormat::Unidbg,
+            // cache fields
+            call_tree: None,
+            phase2_store: None,
+            string_index: None,
+            scan_store: None,
+            reg_last_def: None,
+            lidx_store: None,
+            // Unchanged
             slice_result: None,
             scan_strings_cancelled: Arc::new(AtomicBool::new(false)),
-            trace_format: TraceFormat::Unidbg,
             call_annotations: std::collections::HashMap::new(),
             consumed_seqs: Vec::new(),
+            call_search_texts: std::collections::HashMap::new(),
         });
     }
 

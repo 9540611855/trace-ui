@@ -75,6 +75,16 @@ export default function TitleBar({ onOpenFile, onCloseFile, onRebuildIndex, onSe
   const [appVersion, setAppVersion] = useState("");
   useEffect(() => { getVersion().then(setAppVersion).catch(() => {}); }, []);
   const [showPrefs, setShowPrefs] = useState(false);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((isMac ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === ",") {
+        e.preventDefault();
+        setShowPrefs(prev => !prev);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
   const [showRebuildConfirm, setShowRebuildConfirm] = useState(false);
   const [showClearCacheConfirm, setShowClearCacheConfirm] = useState(false);
   const [showScanStringsConfirm, setShowScanStringsConfirm] = useState(false);
@@ -336,7 +346,7 @@ export default function TitleBar({ onOpenFile, onCloseFile, onRebuildIndex, onSe
 
         {/* Settings 下拉菜单 */}
         <MenuDropdown label="Settings" minWidth={200}>
-          <MenuItem label="Preferences..." onClick={() => setShowPrefs(true)} />
+          <MenuItem label="Preferences..." shortcut={modKey(",")} onClick={() => setShowPrefs(true)} />
           <MenuSeparator />
           <MenuItem label="Open Cache Directory" onClick={async () => {
             try {
@@ -404,9 +414,22 @@ export default function TitleBar({ onOpenFile, onCloseFile, onRebuildIndex, onSe
             Taint
           </button>
         ) : (
-          <MenuDropdown label="Taint" minWidth={200}>
-            <MenuItem label="Configure..." onClick={onTaintReconfigure} />
-          </MenuDropdown>
+          <button
+            onClick={onTaintAnalysis}
+            disabled={!hasSelectedSeq}
+            style={{
+              padding: "4px 10px",
+              background: hasSelectedSeq ? "var(--bg-secondary)" : "transparent",
+              color: hasSelectedSeq ? "var(--text-primary)" : "var(--text-secondary)",
+              border: "none",
+              borderRadius: 4,
+              cursor: hasSelectedSeq ? "pointer" : "default",
+              fontSize: "var(--font-size-sm)",
+              opacity: hasSelectedSeq ? 1 : 0.5,
+            }}
+          >
+            Taint
+          </button>
         )}
         <button
           onClick={canGoBack ? onGoBack : undefined}

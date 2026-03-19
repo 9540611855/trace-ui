@@ -1,11 +1,11 @@
 use serde::Serialize;
 use tauri::State;
 use crate::state::AppState;
-use crate::line_index::LineIndex;
+use crate::flat::line_index::LineIndexView;
 use crate::phase2::extract_insn_offset;
 
 /// 从 trace 行提取偏移地址，回退到绝对地址
-fn resolve_offset(seq: u32, abs_addr: u64, line_index: Option<&LineIndex>, data: &[u8]) -> String {
+fn resolve_offset(seq: u32, abs_addr: u64, line_index: Option<&LineIndexView<'_>>, data: &[u8]) -> String {
     if let Some(li) = line_index {
         if let Some(line_bytes) = li.get_line(data, seq) {
             if let Ok(line_str) = std::str::from_utf8(line_bytes) {
@@ -46,7 +46,9 @@ pub fn get_memory_at(
 ) -> Result<MemorySnapshot, String> {
     let sessions = state.sessions.read().map_err(|e| e.to_string())?;
     let session = sessions.get(&session_id).ok_or_else(|| format!("Session {} 不存在", session_id))?;
-    let phase2 = session.phase2.as_ref().ok_or("索引尚未构建完成")?;
+    let mem_view = session.mem_accesses_view().ok_or("索引尚未构建完成")?;
+
+
 
     // 解析地址
     let addr_str = addr.trim_start_matches("0x").trim_start_matches("0X");
@@ -59,8 +61,6 @@ pub fn get_memory_at(
 
     let mut bytes = vec![0u8; len];
     let mut known = vec![false; len];
-
-    let mem_idx = &phase2.mem_accesses;
 
     for offset in 0..len {
         let byte_addr = base + offset as u64;
@@ -75,7 +75,7 @@ pub fn get_memory_at(
             }
             let check_addr = byte_addr - check_offset;
 
-            if let Some(records) = mem_idx.get(check_addr) {
+            if let Some(records) = mem_view.query(check_addr) {
                 // records 按 seq 升序，从后向前找第一个 seq <= target 的记录（Read 或 Write）
                 let mut candidate_seq: Option<u32> = None;
                 let mut candidate_data: u64 = 0;
@@ -123,21 +123,21 @@ pub fn get_mem_history(
 ) -> Result<Vec<MemHistoryRecord>, String> {
     let sessions = state.sessions.read().map_err(|e| e.to_string())?;
     let session = sessions.get(&session_id).ok_or_else(|| format!("Session {} 不存在", session_id))?;
-    let phase2 = session.phase2.as_ref().ok_or("索引尚未构建完成")?;
+    let mem_view = session.mem_accesses_view().ok_or("索引尚未构建完成")?;
+
+
 
     let addr_str = addr.trim_start_matches("0x").trim_start_matches("0X");
     let target_addr = u64::from_str_radix(addr_str, 16)
         .map_err(|_| format!("无效地址: {}", addr))?;
 
-    let mem_idx = &phase2.mem_accesses;
-    let records = match mem_idx.get(target_addr) {
+    let records = match mem_view.query(target_addr) {
         Some(r) => r,
         None => return Ok(Vec::new()),
     };
 
-    use crate::taint::mem_access::MemRw;
     use crate::commands::browse::parse_trace_line;
-    let line_index = session.line_index.as_ref().ok_or_else(|| "索引尚未构建完成".to_string())?;
+    let line_index = session.line_index_view().ok_or_else(|| "索引尚未构建完成".to_string())?;
     let data: &[u8] = &session.mmap;
     let result: Vec<MemHistoryRecord> = records
         .iter()
@@ -148,13 +148,10 @@ pub fn get_mem_history(
                 .unwrap_or_default();
             MemHistoryRecord {
                 seq: rec.seq,
-                rw: match rec.rw {
-                    MemRw::Read => "R".to_string(),
-                    MemRw::Write => "W".to_string(),
-                },
+                rw: if rec.is_read() { "R".to_string() } else { "W".to_string() },
                 data: format!("0x{:x}", rec.data),
                 size: rec.size,
-                insn_addr: resolve_offset(rec.seq, rec.insn_addr, Some(line_index), data),
+                insn_addr: resolve_offset(rec.seq, rec.insn_addr, Some(&line_index), data),
                 disasm,
             }
         })

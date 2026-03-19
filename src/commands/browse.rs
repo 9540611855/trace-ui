@@ -292,7 +292,7 @@ pub fn get_lines(session_id: String, seqs: Vec<u32>, state: State<'_, AppState>)
         .read()
         .map_err(|e| format!("锁获取失败: {}", e))?;
     let session = sessions.get(&session_id).ok_or_else(|| format!("Session {} 不存在", session_id))?;
-    let line_index = session.line_index.as_ref()
+    let line_index = session.line_index_view()
         .ok_or_else(|| "索引尚未构建完成".to_string())?;
     let format = session.trace_format;
 

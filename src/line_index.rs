@@ -4,7 +4,7 @@ const BLOCK_SIZE: u32 = 256;
 
 /// 采样行偏移索引：每 256 行记录一个字节偏移，查找时从最近采样点向前扫描。
 /// 内存占用从 O(n) 降至 O(n/256)。
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct LineIndex {
     /// sampled_offsets[i] = 第 i * BLOCK_SIZE 行的起始字节偏移
     sampled_offsets: Vec<u64>,
@@ -44,6 +44,17 @@ impl LineIndexBuilder {
         Self {
             sampled_offsets: Vec::with_capacity(estimated_lines / BLOCK_SIZE as usize + 1),
             line_count: 0,
+        }
+    }
+
+    /// 创建从指定行号开始的构建器（用于并行分块扫描）。
+    ///
+    /// `start_line` 是全局行号，确保 BLOCK_SIZE (256) 对齐在全局一致。
+    /// 仅当 `start_line % BLOCK_SIZE == 0` 时第一次 `add_line` 会记录采样点。
+    pub fn with_start_line(start_line: u32, capacity_hint: usize) -> Self {
+        Self {
+            sampled_offsets: Vec::with_capacity(capacity_hint / BLOCK_SIZE as usize + 1),
+            line_count: start_line,
         }
     }
 
@@ -101,7 +112,49 @@ impl LineIndex {
         self.total
     }
 
+    /// Accessor for sampled_offsets slice (for flat conversion).
+    pub fn sampled_offsets(&self) -> &[u64] {
+        &self.sampled_offsets
+    }
+
+    /// 返回指定行号的起始字节偏移（通过采样点 + 向前扫描换行符定位）。
+    /// 用于并行搜索时的分块定位。
+    #[allow(dead_code)]
+    pub fn line_byte_offset(&self, data: &[u8], seq: u32) -> Option<u64> {
+        if seq >= self.total {
+            return None;
+        }
+        let block = (seq / BLOCK_SIZE) as usize;
+        let offset_in_block = (seq % BLOCK_SIZE) as usize;
+        let mut pos = self.sampled_offsets[block] as usize;
+        for _ in 0..offset_in_block {
+            match memchr(b'\n', &data[pos..]) {
+                Some(rel) => pos = pos + rel + 1,
+                None => return None,
+            }
+        }
+        Some(pos as u64)
+    }
+
+    /// Merge multiple LineIndex instances (for parallel scanning).
+    /// Each chunk's LineIndexBuilder starts counting from start_line (global offset),
+    /// so each chunk's `total` = start_line + chunk_lines = global ending line number.
+    /// The last chunk's `total` is therefore the global total line count.
+    pub(crate) fn merge(indices: Vec<LineIndex>) -> LineIndex {
+        let mut all_offsets = Vec::new();
+        // Last chunk's total IS the global total (start_of_last + lines_in_last)
+        let total = indices.last().map(|idx| idx.total).unwrap_or(0);
+        for idx in indices {
+            all_offsets.extend(idx.sampled_offsets);
+        }
+        LineIndex {
+            sampled_offsets: all_offsets,
+            total,
+        }
+    }
+
     /// 获取指定行的原始字节切片
+    #[allow(dead_code)]
     pub fn get_line<'a>(&self, data: &'a [u8], seq: u32) -> Option<&'a [u8]> {
         if seq >= self.total {
             return None;

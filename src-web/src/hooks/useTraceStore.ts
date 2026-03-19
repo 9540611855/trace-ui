@@ -105,9 +105,7 @@ export function useTraceStore(skipStrings: boolean = false) {
     const unlisten = listen<{ progress: number }>(
       "file-loading-progress",
       (event) => {
-        const pct = Math.round(event.payload.progress * 100);
-        setFileLoadingProgress(pct);
-        setLoadingMessage(`Loading file... ${pct}%`);
+        setFileLoadingProgress(Math.round(event.payload.progress * 100));
       }
     );
     return () => { unlisten.then((fn) => fn()); };
@@ -140,9 +138,11 @@ export function useTraceStore(skipStrings: boolean = false) {
               setIndexError({ message: error, filePath: s?.filePath ?? "" });
             }
           } else {
+            // 仅在后端发来 done:false 的进度事件时才显示 "Building index..."
+            // 缓存命中时后端只发 done:true，不会走到这里
             const pct = Math.round(progress * 100);
             const label = isRebuildingRef.current ? "Rebuilding index" : "Building index";
-            setLoadingMessage(`${label}... ${pct}%`);
+            setLoadingMessage(pct === 0 ? `${label}...` : `${label}... ${pct}%`);
           }
         }
       }
@@ -167,7 +167,7 @@ export function useTraceStore(skipStrings: boolean = false) {
 
     setIsLoading(true);
     setFileLoadingProgress(0);
-    setLoadingMessage("Loading file... 0%");
+    setLoadingMessage("Loading file...");
     try {
       const result = await invoke<CreateSessionResult>("create_session", { path });
       const fileName = path.split(/[/\\]/).pop() || path;
@@ -200,7 +200,7 @@ export function useTraceStore(skipStrings: boolean = false) {
       clearSearchState();
 
       // 文件加载完成，前端主动启动索引构建
-      setLoadingMessage("Loading file... 100%");
+      // 不在此处设置 "Building index..." 消息，由后端进度事件驱动显示
       const sid = result.sessionId;
       invoke("build_index", { sessionId: sid, skipStrings: skipStringsRef.current || undefined }).catch(async (e) => {
         // 索引构建失败：关闭 session，标记错误
@@ -297,13 +297,13 @@ export function useTraceStore(skipStrings: boolean = false) {
     });
   }, [updateSession]);
 
-  const searchTrace = useCallback(async (query: string) => {
+  const searchTrace = useCallback(async (query: string): Promise<number> => {
     const sid = activeSessionIdRef.current;
     if (!sid || !query.trim()) {
       setSearchResults([]);
       setSearchQuery("");
       setSearchStatus("");
-      return;
+      return 0;
     }
     setIsSearching(true);
     setSearchQuery(query);
@@ -315,10 +315,14 @@ export function useTraceStore(skipStrings: boolean = false) {
       });
       setSearchResults(result.matches);
       setSearchTotalMatches(result.total_matches);
-      setSearchStatus(`${result.total_matches.toLocaleString()} results`);
+      setSearchStatus(result.total_matches === 0
+        ? `No results found for "${query}"`
+        : `${result.total_matches.toLocaleString()} results`);
+      return result.total_matches;
     } catch (e) {
       setSearchStatus(`Search failed: ${e}`);
       setSearchResults([]);
+      return 0;
     } finally {
       setIsSearching(false);
     }

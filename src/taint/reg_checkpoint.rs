@@ -39,6 +39,7 @@ impl RegCheckpoints {
         self.snapshots.push(RegSnapshot(*values));
     }
 
+    #[allow(dead_code)]
     pub fn get_nearest_before(&self, seq: u32) -> Option<(u32, &[u64; RegId::COUNT])> {
         if self.snapshots.is_empty() {
             return None;

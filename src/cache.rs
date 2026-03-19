@@ -1,12 +1,14 @@
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use sha2::{Sha256, Digest};
-use crate::state::Phase2State;
-use crate::taint::scanner::ScanState;
+use memmap2::Mmap;
+use crate::taint::strings::StringIndex;
 
-const MAGIC: &[u8; 8] = b"TCACHE02";
+const MAGIC: &[u8; 8] = b"TCACHE03";
+const MAGIC_V4: &[u8; 8] = b"TCACHE04";
 const HEAD_SIZE: usize = 1024 * 1024; // 1MB
+const HEADER_LEN_V4: usize = 64;
 
 static CACHE_DIR_OVERRIDE: RwLock<Option<PathBuf>> = RwLock::new(None);
 
@@ -28,6 +30,14 @@ fn cache_path(file_path: &str, suffix: &str) -> Option<PathBuf> {
     hasher.update(file_path.as_bytes());
     let hash = format!("{:x}", hasher.finalize());
     cache_dir().map(|d| d.join(format!("{}{}.bin", hash, suffix)))
+}
+
+/// Cache path with explicit extension (no automatic `.bin` suffix).
+fn cache_path_ext(file_path: &str, suffix: &str) -> Option<PathBuf> {
+    let mut hasher = Sha256::new();
+    hasher.update(file_path.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    cache_dir().map(|d| d.join(format!("{}{}", hash, suffix)))
 }
 
 fn head_hash(data: &[u8]) -> [u8; 32] {
@@ -66,7 +76,7 @@ fn write_header(buf: &mut Vec<u8>, data: &[u8]) {
     buf.extend_from_slice(&head_hash(data));
 }
 
-// ── 通用加载/保存 ──
+// ── 通用加载/保存 (bincode, legacy) ──
 
 fn load_cached<T: serde::de::DeserializeOwned>(file_path: &str, data: &[u8], suffix: &str) -> Option<T> {
     let path = cache_path(file_path, suffix)?;
@@ -93,38 +103,145 @@ fn save_cached<T: serde::Serialize>(file_path: &str, data: &[u8], suffix: &str, 
     let _ = writer.flush();
 }
 
-// ── Phase2 缓存 ──
-
-pub fn load_cache(file_path: &str, data: &[u8]) -> Option<Phase2State> {
-    load_cached(file_path, data, "")
+/// 将预序列化的 bincode 字节写入缓存文件（TCACHE03 header + raw bytes），不依赖 session。
+pub fn save_bincode_raw(file_path: &str, data: &[u8], suffix: &str, payload: &[u8]) {
+    let Some(path) = cache_path(file_path, suffix) else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let file = match std::fs::File::create(&path) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    let mut writer = BufWriter::new(file);
+    let mut header = Vec::with_capacity(48);
+    write_header(&mut header, data);
+    if writer.write_all(&header).is_err() { return; }
+    if writer.write_all(payload).is_err() { return; }
+    let _ = writer.flush();
 }
 
-pub fn save_cache(file_path: &str, data: &[u8], state: &Phase2State) {
-    save_cached(file_path, data, "", state);
+// ── Section-based cache save/load ──
+
+/// 将预序列化的 section 字节写入缓存文件（header + raw bytes），不依赖 session。
+pub fn save_sections_raw(file_path: &str, data: &[u8], suffix: &str, section_bytes: &[u8]) {
+    let Some(path) = cache_path_ext(file_path, suffix) else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let file = match std::fs::File::create(&path) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    let mut writer = BufWriter::new(file);
+
+    // Write 64-byte V4 header
+    let mut header = Vec::with_capacity(HEADER_LEN_V4);
+    header.extend_from_slice(MAGIC_V4);
+    header.extend_from_slice(&(data.len() as u64).to_le_bytes());
+    header.extend_from_slice(&head_hash(data));
+    header.resize(HEADER_LEN_V4, 0); // pad to 64 bytes
+
+    if writer.write_all(&header).is_err() { return; }
+    if writer.write_all(section_bytes).is_err() { return; }
+    let _ = writer.flush();
+    eprintln!("[cache] saved {} ({} + {} bytes)", suffix, HEADER_LEN_V4, section_bytes.len());
 }
 
-// ── ScanState 缓存 ──
+fn load_cache_mmap(file_path: &str, data: &[u8], suffix: &str) -> Option<Arc<Mmap>> {
+    let path = cache_path_ext(file_path, suffix)?;
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(_) => {
+            eprintln!("[cache] {} not found: {:?}", suffix, path);
+            return None;
+        }
+    };
+    let mmap = unsafe { Mmap::map(&file) }.ok()?;
 
-pub fn load_scan_cache(file_path: &str, data: &[u8]) -> Option<ScanState> {
-    load_cached(file_path, data, "-scan")
+    // Validate V4 header
+    if mmap.len() < HEADER_LEN_V4 {
+        eprintln!("[cache] {} too small: {} bytes", suffix, mmap.len());
+        return None;
+    }
+    if &mmap[0..8] != MAGIC_V4 {
+        eprintln!("[cache] {} magic mismatch: {:?}", suffix, &mmap[0..8]);
+        return None;
+    }
+    let stored_size = u64::from_le_bytes(mmap[8..16].try_into().ok()?);
+    if stored_size != data.len() as u64 {
+        eprintln!("[cache] {} size mismatch: stored={} actual={}", suffix, stored_size, data.len());
+        return None;
+    }
+    let cached_hash: [u8; 32] = mmap[16..48].try_into().ok()?;
+    if cached_hash != head_hash(data) {
+        eprintln!("[cache] {} hash mismatch", suffix);
+        return None;
+    }
+
+    eprintln!("[cache] {} loaded: {} bytes", suffix, mmap.len());
+    Some(Arc::new(mmap))
 }
 
-pub fn save_scan_cache(file_path: &str, data: &[u8], state: &ScanState) {
-    save_cached(file_path, data, "-scan", state);
+// ── Section-based cache load ──
+
+pub fn load_phase2_cache(file_path: &str, data: &[u8]) -> Option<Arc<Mmap>> {
+    load_cache_mmap(file_path, data, ".p2.cache")
 }
 
-// ── LineIndex 缓存 ──
-
-pub fn load_line_index_cache(file_path: &str, data: &[u8]) -> Option<crate::line_index::LineIndex> {
-    load_cached(file_path, data, "-lidx")
+pub fn load_scan_cache(file_path: &str, data: &[u8]) -> Option<Arc<Mmap>> {
+    load_cache_mmap(file_path, data, ".scan.cache")
 }
 
-pub fn save_line_index_cache(file_path: &str, data: &[u8], line_index: &crate::line_index::LineIndex) {
-    save_cached(file_path, data, "-lidx", line_index);
+pub fn load_lidx_cache(file_path: &str, data: &[u8]) -> Option<Arc<Mmap>> {
+    load_cache_mmap(file_path, data, ".lidx.cache")
 }
 
-/// 删除指定文件的所有缓存（Phase2 + ScanState + LineIndex）
+// ── StringIndex bincode 缓存 ──
+
+pub fn save_string_cache(file_path: &str, data: &[u8], index: &StringIndex) {
+    save_cached(file_path, data, ".strings", index);
+}
+
+pub fn load_string_cache(file_path: &str, data: &[u8]) -> Option<StringIndex> {
+    load_cached(file_path, data, ".strings")
+}
+
+// ── Gumtrace extra (call_annotations + consumed_seqs) bincode 缓存 ──
+
+use crate::taint::gumtrace_parser::CallAnnotation;
+
+pub fn save_gumtrace_extra(
+    file_path: &str,
+    data: &[u8],
+    call_annotations: &std::collections::HashMap<u32, CallAnnotation>,
+    consumed_seqs: &[u32],
+) {
+    save_cached(file_path, data, ".gum-extra", &(call_annotations, consumed_seqs));
+}
+
+pub fn load_gumtrace_extra(
+    file_path: &str,
+    data: &[u8],
+) -> Option<(std::collections::HashMap<u32, CallAnnotation>, Vec<u32>)> {
+    load_cached(file_path, data, ".gum-extra")
+}
+
+/// 删除指定文件的所有缓存
 pub fn delete_cache(file_path: &str) {
+    // New section-based cache suffixes
+    for suffix in [".p2.cache", ".scan.cache", ".lidx.cache", ".strings.bin", ".gum-extra.bin"] {
+        if let Some(p) = cache_path_ext(file_path, suffix) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+    // Old rkyv suffixes (cleanup)
+    for suffix in [".p2.rkyv", ".scan.rkyv", ".lidx.rkyv"] {
+        if let Some(p) = cache_path_ext(file_path, suffix) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+    // Old bincode suffixes (cleanup)
     for suffix in ["", "-scan", "-lidx"] {
         if let Some(p) = cache_path(file_path, suffix) {
             let _ = std::fs::remove_file(p);
@@ -146,7 +263,8 @@ pub fn clear_all_cache() -> (u32, u64) {
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("bin") {
+            let ext = path.extension().and_then(|e| e.to_str());
+            if ext == Some("bin") || ext == Some("rkyv") || ext == Some("cache") {
                 if let Ok(meta) = path.metadata() {
                     total_size += meta.len();
                 }

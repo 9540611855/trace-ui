@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 use crate::state::AppState;
-use crate::taint::types::parse_reg;
+use crate::taint::types::{parse_reg, TraceFormat};
 use crate::taint::def_use::determine_def_use;
 use crate::taint::insn_class;
 use crate::taint::parser;
+use crate::taint::gumtrace_parser;
 use crate::taint::slicer;
 
 const MAX_RESOLVE_SCAN: u32 = 50000;
@@ -20,9 +21,11 @@ pub struct SliceResult {
 /// 解析 from_spec 字符串并找到 BFS 起点行号
 fn resolve_start_index(
     spec: &str,
-    scan_state: &crate::taint::scanner::ScanState,
+    reg_last_def: &crate::taint::scanner::RegLastDef,
+    mem_last_def: &crate::flat::mem_last_def::MemLastDefView,
     mmap: &[u8],
-    line_index: &crate::line_index::LineIndex,
+    line_index: &crate::flat::line_index::LineIndexView<'_>,
+    format: TraceFormat,
 ) -> Result<u32, String> {
     if let Some(rest) = spec.strip_prefix("reg:") {
         let (name, suffix) = rest.rsplit_once('@')
@@ -31,7 +34,7 @@ fn resolve_start_index(
             .ok_or_else(|| format!("未知寄存器: {}", name))?;
 
         if suffix == "last" {
-            scan_state.reg_last_def.get(&reg)
+            reg_last_def.get(&reg)
                 .copied()
                 .ok_or_else(|| format!("寄存器 {} 在 trace 中从未被定义", name))
         } else {
@@ -39,7 +42,7 @@ fn resolve_start_index(
                 .map_err(|_| format!("无效行号: {}", suffix))?
                 .checked_sub(1)
                 .ok_or("行号必须 >= 1".to_string())?;
-            resolve_reg_def(reg, line, mmap, line_index)
+            resolve_reg_def(reg, line, mmap, line_index, format)
         }
     } else if let Some(rest) = spec.strip_prefix("mem:") {
         let (addr_str, suffix) = rest.rsplit_once('@')
@@ -51,7 +54,7 @@ fn resolve_start_index(
             .map_err(|_| format!("无效十六进制地址: {}", addr_str))?;
 
         if suffix == "last" {
-            scan_state.mem_last_def.get(&addr)
+            mem_last_def.get(&addr)
                 .map(|(line, _)| line)
                 .ok_or_else(|| format!("地址 0x{:x} 在 trace 中从未被写入", addr))
         } else {
@@ -59,7 +62,7 @@ fn resolve_start_index(
                 .map_err(|_| format!("无效行号: {}", suffix))?
                 .checked_sub(1)
                 .ok_or("行号必须 >= 1".to_string())?;
-            resolve_mem_store(addr, line, mmap, line_index)
+            resolve_mem_store(addr, line, mmap, line_index, format)
         }
     } else {
         Err(format!("不支持的 spec 格式: {} (需要 reg:NAME@... 或 mem:ADDR@...)", spec))
@@ -70,13 +73,18 @@ fn resolve_reg_def(
     target_reg: crate::taint::types::RegId,
     from_line: u32,
     mmap: &[u8],
-    line_index: &crate::line_index::LineIndex,
+    line_index: &crate::flat::line_index::LineIndexView<'_>,
+    format: TraceFormat,
 ) -> Result<u32, String> {
     let scan_start = from_line.saturating_sub(MAX_RESOLVE_SCAN);
     for s in (scan_start..=from_line).rev() {
         if let Some(raw) = line_index.get_line(mmap, s) {
             if let Ok(line_str) = std::str::from_utf8(raw) {
-                if let Some(parsed) = parser::parse_line(line_str) {
+                let parsed = match format {
+                    TraceFormat::Unidbg => parser::parse_line(line_str),
+                    TraceFormat::Gumtrace => gumtrace_parser::parse_line_gumtrace(line_str),
+                };
+                if let Some(parsed) = parsed {
                     let cls = insn_class::classify_and_refine(&parsed);
                     let (defs, _) = determine_def_use(cls, &parsed);
                     if defs.iter().any(|r| *r == target_reg) {
@@ -93,13 +101,18 @@ fn resolve_mem_store(
     target_addr: u64,
     from_line: u32,
     mmap: &[u8],
-    line_index: &crate::line_index::LineIndex,
+    line_index: &crate::flat::line_index::LineIndexView<'_>,
+    format: TraceFormat,
 ) -> Result<u32, String> {
     let scan_start = from_line.saturating_sub(MAX_RESOLVE_SCAN);
     for s in (scan_start..=from_line).rev() {
         if let Some(raw) = line_index.get_line(mmap, s) {
             if let Ok(line_str) = std::str::from_utf8(raw) {
-                if let Some(parsed) = parser::parse_line(line_str) {
+                let parsed = match format {
+                    TraceFormat::Unidbg => parser::parse_line(line_str),
+                    TraceFormat::Gumtrace => gumtrace_parser::parse_line_gumtrace(line_str),
+                };
+                if let Some(parsed) = parsed {
                     if let Some(ref mem) = parsed.mem_op {
                         if mem.is_write {
                             let width = mem.elem_width as u64;
@@ -115,34 +128,38 @@ fn resolve_mem_store(
     Err(format!("在 {} 行范围内未找到地址 0x{:x} 的 STORE", MAX_RESOLVE_SCAN, target_addr))
 }
 
-#[tauri::command]
-pub fn run_slice(
-    session_id: String,
-    from_specs: Vec<String>,
+fn run_slice_inner(
+    session_id: &str,
+    from_specs: &[String],
     start_seq: Option<u32>,
     end_seq: Option<u32>,
-    data_only: Option<bool>,
-    state: State<'_, AppState>,
+    data_only: bool,
+    state: &AppState,
 ) -> Result<SliceResult, String> {
-    let data_only = data_only.unwrap_or(false);
     // Phase 1: read lock - resolve specs and run BFS (read-only)
     let marked = {
         let sessions = state.sessions.read().map_err(|e| e.to_string())?;
-        let session = sessions.get(&session_id)
+        let session = sessions.get(session_id)
             .ok_or_else(|| format!("Session {} 不存在", session_id))?;
-        let scan_state = session.scan_state.as_ref()
+        let reg_last_def = session.reg_last_def.as_ref()
+            .ok_or("索引尚未构建完成，请等待构建完成后再执行切片")?;
+        let mem_last_def = session.mem_last_def_view()
+            .ok_or("索引尚未构建完成，请等待构建完成后再执行切片")?;
+        let scan_view = session.scan_view()
             .ok_or("索引尚未构建完成，请等待构建完成后再执行切片")?;
 
+        let format = session.trace_format;
         let mut start_indices = Vec::new();
-        for spec in &from_specs {
-            let idx = resolve_start_index(spec, scan_state, &session.mmap, session.line_index.as_ref().ok_or_else(|| "索引尚未构建完成".to_string())?)?;
+        for spec in from_specs {
+            let lidx_view = session.line_index_view().ok_or_else(|| "索引尚未构建完成".to_string())?;
+            let idx = resolve_start_index(spec, reg_last_def, &mem_last_def, &session.mmap, &lidx_view, format)?;
             start_indices.push(idx);
         }
 
         let mut marked = if data_only {
-            slicer::bfs_slice_with_options(scan_state, &start_indices, true)
+            slicer::bfs_slice_with_options(&scan_view, &start_indices, true)
         } else {
-            slicer::bfs_slice(scan_state, &start_indices)
+            slicer::bfs_slice(&scan_view, &start_indices)
         };
 
         // Apply optional range filter
@@ -169,12 +186,30 @@ pub fn run_slice(
     // Phase 2: write lock - store result
     {
         let mut sessions = state.sessions.write().map_err(|e| e.to_string())?;
-        if let Some(session) = sessions.get_mut(&session_id) {
+        if let Some(session) = sessions.get_mut(session_id) {
             session.slice_result = Some(marked);
         }
     }
 
     Ok(SliceResult { marked_count, total_lines, percentage })
+}
+
+#[tauri::command]
+pub async fn run_slice(
+    session_id: String,
+    from_specs: Vec<String>,
+    start_seq: Option<u32>,
+    end_seq: Option<u32>,
+    data_only: Option<bool>,
+    app: AppHandle,
+) -> Result<SliceResult, String> {
+    let data_only = data_only.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        run_slice_inner(&session_id, &from_specs, start_seq, end_seq, data_only, &state)
+    })
+    .await
+    .map_err(|e| format!("Task execution failed: {}", e))?
 }
 
 #[tauri::command]
@@ -248,7 +283,7 @@ pub fn export_taint_results(
         .ok_or_else(|| format!("Session {} 不存在", session_id))?;
     let marked = session.slice_result.as_ref()
         .ok_or("没有活跃的污点分析结果")?;
-    let line_index = session.line_index.as_ref().ok_or_else(|| "索引尚未构建完成".to_string())?;
+    let line_index = session.line_index_view().ok_or_else(|| "索引尚未构建完成".to_string())?;
 
     let marked_count = marked.count_ones() as u32;
     let total_lines = marked.len() as u32;

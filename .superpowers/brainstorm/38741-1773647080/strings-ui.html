@@ -1,0 +1,91 @@
+<h2>Strings 面板 UI 设计</h2>
+<p class="subtitle">选择面板的布局位置和交互方式</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>作为底部 TabPanel 的新 Tab</h3>
+      <p>与 Memory / Taint State / Search 并列，作为第五个 Tab。</p>
+      <div class="mockup">
+        <div class="mockup-header">底部 TabPanel</div>
+        <div class="mockup-body" style="font-family:monospace;font-size:12px;background:#1e1e1e;color:#ccc;padding:0;">
+          <div style="display:flex;background:#2d2d2d;border-bottom:1px solid #444;padding:0 8px;">
+            <div style="padding:6px 12px;color:#888;cursor:pointer;">Memory</div>
+            <div style="padding:6px 12px;color:#888;cursor:pointer;">Accesses</div>
+            <div style="padding:6px 12px;color:#888;cursor:pointer;">Taint State</div>
+            <div style="padding:6px 12px;color:#888;cursor:pointer;">Search</div>
+            <div style="padding:6px 12px;color:#e0e0e0;border-bottom:2px solid #007acc;font-weight:bold;">Strings</div>
+          </div>
+          <div style="padding:8px;">
+            <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
+              <input style="flex:1;background:#3c3c3c;border:1px solid #555;color:#ccc;padding:4px 8px;border-radius:3px;" placeholder="Search strings..." />
+              <span style="color:#888;font-size:11px;">Min len:</span>
+              <input type="range" style="width:60px;" />
+              <span style="color:#aaa;font-size:11px;">4</span>
+              <span style="color:#666;font-size:11px;margin-left:8px;">1,247 strings</span>
+            </div>
+            <div style="border:1px solid #333;border-radius:3px;">
+              <div style="display:grid;grid-template-columns:70px 110px 1fr 60px 50px 80px;padding:4px 8px;background:#2a2a2a;border-bottom:1px solid #333;color:#888;font-size:11px;">
+                <span>Seq</span><span>Address</span><span>Content</span><span>Enc</span><span>Len</span><span>XRefs</span>
+              </div>
+              <div style="display:grid;grid-template-columns:70px 110px 1fr 60px 50px 80px;padding:4px 8px;border-bottom:1px solid #2a2a2a;cursor:pointer;" onmouseover="this.style.background='#264f78'" onmouseout="this.style.background='transparent'">
+                <span style="color:#6796e6;">1042</span><span style="color:#b5cea8;">0xbffff100</span><span style="color:#ce9178;">"AES-256-CBC"</span><span style="color:#888;">ASCII</span><span>11</span><span style="color:#569cd6;">3</span>
+              </div>
+              <div style="display:grid;grid-template-columns:70px 110px 1fr 60px 50px 80px;padding:4px 8px;border-bottom:1px solid #2a2a2a;cursor:pointer;" onmouseover="this.style.background='#264f78'" onmouseout="this.style.background='transparent'">
+                <span style="color:#6796e6;">2871</span><span style="color:#b5cea8;">0x40012a00</span><span style="color:#ce9178;">"password123"</span><span style="color:#888;">ASCII</span><span>11</span><span style="color:#569cd6;">7</span>
+              </div>
+              <div style="display:grid;grid-template-columns:70px 110px 1fr 60px 50px 80px;padding:4px 8px;border-bottom:1px solid #2a2a2a;cursor:pointer;background:#264f78;">
+                <span style="color:#6796e6;">5523</span><span style="color:#b5cea8;">0x40012a00</span><span style="color:#ce9178;">"e3b0c44298fc..."</span><span style="color:#888;">ASCII</span><span>64</span><span style="color:#569cd6;">12</span>
+              </div>
+              <div style="display:grid;grid-template-columns:70px 110px 1fr 60px 50px 80px;padding:4px 8px;border-bottom:1px solid #2a2a2a;cursor:pointer;" onmouseover="this.style.background='#264f78'" onmouseout="this.style.background='transparent'">
+                <span style="color:#6796e6;">8910</span><span style="color:#b5cea8;">0xbffff200</span><span style="color:#ce9178;">"签名验证失败"</span><span style="color:#888;">UTF8</span><span>21</span><span style="color:#569cd6;">1</span>
+              </div>
+              <div style="padding:4px 8px;color:#666;font-size:11px;text-align:center;">... (virtual scroll)</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p><strong>优点：</strong>与现有 UI 完全一致，零学习成本，共享 TabPanel 的拖拽浮出能力</p>
+      <p><strong>缺点：</strong>底部空间有限，需要与其他 Tab 切换</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>作为左侧面板的新 Tab（与 FunctionTree 并列）</h3>
+      <p>在左侧区域加一个 Tab 切换，FunctionTree 和 Strings 二选一显示。</p>
+      <div class="mockup">
+        <div class="mockup-header">左侧面板</div>
+        <div class="mockup-body" style="font-family:monospace;font-size:12px;background:#1e1e1e;color:#ccc;padding:0;width:240px;">
+          <div style="display:flex;background:#2d2d2d;border-bottom:1px solid #444;">
+            <div style="padding:6px 12px;color:#888;cursor:pointer;">Functions</div>
+            <div style="padding:6px 12px;color:#e0e0e0;border-bottom:2px solid #007acc;font-weight:bold;">Strings</div>
+          </div>
+          <div style="padding:4px;">
+            <input style="width:calc(100% - 12px);background:#3c3c3c;border:1px solid #555;color:#ccc;padding:3px 6px;border-radius:3px;font-size:11px;margin-bottom:4px;" placeholder="Filter..." />
+            <div style="font-size:11px;">
+              <div style="padding:3px 4px;border-bottom:1px solid #2a2a2a;cursor:pointer;" onmouseover="this.style.background='#264f78'" onmouseout="this.style.background='transparent'">
+                <span style="color:#b5cea8;">bffff100</span> <span style="color:#ce9178;">"AES-256-CBC"</span>
+              </div>
+              <div style="padding:3px 4px;border-bottom:1px solid #2a2a2a;cursor:pointer;" onmouseover="this.style.background='#264f78'" onmouseout="this.style.background='transparent'">
+                <span style="color:#b5cea8;">40012a00</span> <span style="color:#ce9178;">"password123"</span>
+              </div>
+              <div style="padding:3px 4px;border-bottom:1px solid #2a2a2a;cursor:pointer;" onmouseover="this.style.background='#264f78'" onmouseout="this.style.background='transparent'">
+                <span style="color:#b5cea8;">40012a00</span> <span style="color:#ce9178;">"e3b0c44298fc..."</span>
+              </div>
+              <div style="padding:3px 4px;border-bottom:1px solid #2a2a2a;cursor:pointer;" onmouseover="this.style.background='#264f78'" onmouseout="this.style.background='transparent'">
+                <span style="color:#b5cea8;">bffff200</span> <span style="color:#ce9178;">"签名验证失败"</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p><strong>优点：</strong>类似 IDA 的布局风格（左侧导航列表）</p>
+      <p><strong>缺点：</strong>左侧宽度有限，长字符串会截断；与 FunctionTree 互斥显示</p>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:24px;">两个方案都支持拖拽浮出为独立浮窗。推荐 A：底部 TabPanel 空间更大，能展示更多列信息，且已有成熟的 Tab 基础设施。</p>

@@ -33,6 +33,9 @@ interface Props {
   sliceActive: boolean;
   sliceInfo: SliceResult | null;
   sliceFromSpecs: string[];
+  isSlicing: boolean;
+  sliceDuration: number | null;
+  sliceError: string | null;
   stringsScanning?: boolean;
 }
 
@@ -41,6 +44,7 @@ export default function TabPanel({
   isPhase2Ready,
   floatedPanels, onFloat, sessionId,
   sliceActive, sliceInfo, sliceFromSpecs,
+  isSlicing, sliceDuration, sliceError,
   stringsScanning,
 }: Props) {
   const [active, setActive] = useState<TabName>("Memory");
@@ -59,6 +63,13 @@ export default function TabPanel({
       setActive("Search");
     }
   }, [isSearching, floatedPanels]);
+
+  // 污点分析自动切换（仅在 Taint State 未浮动时）
+  useEffect(() => {
+    if ((isSlicing || sliceActive) && !floatedPanels.has("taint-state")) {
+      setActive("Taint State");
+    }
+  }, [isSlicing, sliceActive, floatedPanels]);
 
   // View in Memory：自动切换到 Memory tab（仅在 Memory 未浮动时）
   useEffect(() => {
@@ -150,7 +161,7 @@ export default function TabPanel({
           </div>
         ) : searchResults.length === 0 ? (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>{""}</span>
+            <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>{searchQuery ? `No results found for "${searchQuery}"` : ""}</span>
           </div>
         ) : (
           <>
@@ -175,21 +186,47 @@ export default function TabPanel({
         )}
       </div>
 
-      <div style={{ ...tabStyle("Taint State"), alignItems: "center", justifyContent: "center", padding: 16 }}>
-        {sliceActive && sliceInfo ? (
-          <div style={{ color: "var(--text-secondary)", fontSize: 12, textAlign: "center", lineHeight: 1.8 }}>
-            <span style={{ color: "var(--text-primary)", fontSize: 14 }}>
-              {sliceInfo.markedCount.toLocaleString()} / {sliceInfo.totalLines.toLocaleString()} lines tainted ({sliceInfo.percentage.toFixed(1)}%)
-            </span>
-            <br />
-            {sliceFromSpecs.map((spec, i) => (
-              <span key={i} style={{ color: "var(--text-secondary)" }}>
-                {i > 0 ? ", " : "Source: "}{spec}
+      <div style={{ ...tabStyle("Taint State"), alignItems: "flex-start", justifyContent: "center", padding: 16 }}>
+        {isSlicing ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", justifyContent: "center" }}>
+            <span style={{
+              display: "inline-block", width: 14, height: 14,
+              border: "2px solid var(--border-color)",
+              borderTop: "2px solid var(--btn-primary)",
+              borderRadius: "50%",
+              animation: "spin 1s linear infinite",
+            }} />
+            <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>Analyzing...</span>
+          </div>
+        ) : sliceError ? (
+          <div style={{ color: "#e06c75", fontSize: 12, lineHeight: 1.6 }}>
+            Analysis failed: {sliceError}
+          </div>
+        ) : sliceActive && sliceInfo ? (
+          <div style={{ fontSize: 12, lineHeight: 2, color: "var(--text-secondary)" }}>
+            <div>
+              <span style={{ color: "var(--text-secondary)", display: "inline-block", width: 52 }}>Source:</span>
+              <span style={{ color: "var(--text-primary)" }}>{sliceFromSpecs.join(", ")}</span>
+            </div>
+            <div>
+              <span style={{ color: "var(--text-secondary)", display: "inline-block", width: 52 }}>Result:</span>
+              <span style={{ color: "var(--text-primary)" }}>
+                {sliceInfo.markedCount.toLocaleString()} / {sliceInfo.totalLines.toLocaleString()} lines ({sliceInfo.percentage.toFixed(1)}%)
               </span>
-            ))}
+            </div>
+            {sliceDuration != null && (
+              <div>
+                <span style={{ color: "var(--text-secondary)", display: "inline-block", width: 52 }}>Time:</span>
+                <span style={{ color: "var(--text-primary)" }}>{(sliceDuration / 1000).toFixed(2)}s</span>
+              </div>
+            )}
           </div>
         ) : (
-          <span style={{ color: "var(--text-secondary)", fontSize: 12 }}></span>
+          <div style={{ width: "100%", textAlign: "center" }}>
+            <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+              No taint analysis results. Right-click a line to start.
+            </span>
+          </div>
         )}
       </div>
 

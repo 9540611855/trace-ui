@@ -1,0 +1,105 @@
+<h2>三栏布局确认</h2>
+<p class="subtitle">请确认这是否符合你的设想</p>
+
+<div class="mockup" style="margin-bottom:24px">
+  <div class="mockup-header">三栏布局：函数树 | Trace + 底部面板 | 反编译</div>
+  <div class="mockup-body" style="display:flex;height:340px;font-size:11px;font-family:monospace;gap:0">
+
+    <!-- 左栏：函数树 -->
+    <div style="width:160px;background:#141422;border-right:2px solid #a8e6a1;padding:6px;overflow:hidden;flex-shrink:0">
+      <div style="color:#a8e6a1;font-size:10px;margin-bottom:6px;font-weight:bold">FUNCTION TREE</div>
+      <div style="color:#888;font-size:10px">▼ sub_6f8800</div>
+      <div style="color:#fff;font-size:10px;padding-left:12px;background:#2a4a2a;margin:1px 0">▶ sub_6f8810</div>
+      <div style="color:#888;font-size:10px;padding-left:12px">▶ sub_6f9000</div>
+      <div style="color:#888;font-size:10px;padding-left:12px">▶ sub_6f9200</div>
+      <div style="color:#888;font-size:10px">▼ sub_6fa000</div>
+      <div style="color:#888;font-size:10px;padding-left:12px">▶ sub_6fa100</div>
+    </div>
+
+    <!-- 中间栏：Trace + 底部面板 -->
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+      <!-- Trace 汇编表格 -->
+      <div style="flex:1;background:#1a1a2e;padding:6px;overflow:hidden;border-bottom:2px solid #444">
+        <div style="color:#666;margin-bottom:4px;font-size:10px">TRACE ASSEMBLY</div>
+        <div style="color:#888">0001  0x406f8810  push {x29, x30}</div>
+        <div style="color:#888">0002  0x406f8814  ldr w12, [x23]</div>
+        <div style="color:#888">0003  0x406f8818  add w0, w12, #1</div>
+        <div style="background:#2a4a6a;color:#a6d9ff;padding:1px 2px">0004  0x406f881c  str w0, [x23]</div>
+        <div style="color:#888">0005  0x406f8820  bl  0x406f9000</div>
+        <div style="color:#888">0006  0x406f8824  mov x1, x0</div>
+        <div style="color:#888">0007  0x406f8828  cmp w1, #0</div>
+        <div style="color:#888">0008  0x406f882c  b.eq 0x406f8840</div>
+        <div style="color:#888">0009  0x406f8830  add w2, w1, w0</div>
+      </div>
+      <!-- 底部 TabPanel -->
+      <div style="height:100px;background:#1e1e2e;padding:6px;overflow:hidden;flex-shrink:0">
+        <div style="display:flex;gap:8px;margin-bottom:4px;font-size:10px">
+          <span style="color:#a8e6a1;border-bottom:1px solid #a8e6a1">Memory</span>
+          <span style="color:#666">Accesses</span>
+          <span style="color:#666">Taint</span>
+          <span style="color:#666">Search</span>
+          <span style="color:#666">Strings</span>
+        </div>
+        <div style="color:#888;font-size:10px">
+          <div>41688650: 00 00 00 00 16 e8 00 00  ........</div>
+          <div>41688658: 01 00 00 00 00 00 00 00  ........</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右栏：反编译面板 -->
+    <div style="width:240px;background:#1c1c30;border-left:2px solid #a8e6a1;padding:6px;overflow:hidden;flex-shrink:0;position:relative">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="color:#a8e6a1;font-size:10px;font-weight:bold">DECOMPILE</span>
+        <div style="display:flex;gap:6px">
+          <span style="color:#666;font-size:10px;cursor:pointer" title="浮出为独立窗口">⛶</span>
+          <span style="color:#666;font-size:10px;cursor:pointer" title="关闭面板">✕</span>
+        </div>
+      </div>
+      <div style="color:#666;font-size:10px;margin-bottom:4px;border-bottom:1px solid #333;padding-bottom:3px">
+        sub_6f8810 (libxxx.so+0x6f8810)
+      </div>
+      <div style="color:#c586c0;font-size:11px">int <span style="color:#dcdcaa">sub_6f8810</span><span style="color:#888">(</span><span style="color:#4ec9b0">int</span> a1<span style="color:#888">)</span> <span style="color:#888">{</span></div>
+      <div style="color:#888;font-size:11px;padding-left:12px">int v0;</div>
+      <div style="color:#888;font-size:11px;padding-left:12px">int v1;</div>
+      <div style="color:#888;font-size:11px"></div>
+      <div style="color:#888;font-size:11px;padding-left:12px">v0 = *(_DWORD *)a1;</div>
+      <div style="background:#2a4a2a;color:#a8e6a1;padding:1px 2px;font-size:11px;padding-left:12px">*(_DWORD *)a1 = v0 + 1;</div>
+      <div style="color:#888;font-size:11px;padding-left:12px">v1 = <span style="color:#dcdcaa">sub_6f9000</span>();</div>
+      <div style="color:#888;font-size:11px;padding-left:12px">if (v1) {</div>
+      <div style="color:#888;font-size:11px;padding-left:24px">return v1 + v0;</div>
+      <div style="color:#888;font-size:11px;padding-left:12px">}</div>
+      <div style="color:#888;font-size:11px;padding-left:12px">return 0;</div>
+      <div style="color:#888;font-size:11px">}</div>
+    </div>
+
+  </div>
+</div>
+
+<div class="section">
+  <h3>交互说明</h3>
+  <ul style="color:#ccc;line-height:1.8">
+    <li><strong style="color:#a6d9ff">Trace → Decompile 联动：</strong>点击 trace 中的某行汇编，右侧自动定位到对应函数并高亮对应伪代码行</li>
+    <li><strong style="color:#a8e6a1">Decompile → Trace 联动：</strong>点击伪代码某行，左侧 trace 跳转到该行对应的汇编指令</li>
+    <li><strong style="color:#ffb5d8">函数切换：</strong>当 trace 滚动进入另一个函数时，右侧反编译自动切换到新函数</li>
+    <li><strong style="color:#ffd700">浮出/关闭：</strong>右上角按钮支持浮出为独立窗口（复用 FloatingPanel），或完全关闭隐藏右栏</li>
+    <li><strong style="color:#d4d4d4">可调整宽度：</strong>左右分栏边界可拖拽调整（复用 react-resizable-panels）</li>
+  </ul>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="correct" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>符合我的设想</h3>
+      <p>就是这样，继续往下讨论</p>
+    </div>
+  </div>
+  <div class="option" data-choice="adjust" onclick="toggleSelect(this)">
+    <div class="letter">✎</div>
+    <div class="content">
+      <h3>需要调整</h3>
+      <p>大方向对了，但有些细节要改（请在终端说明）</p>
+    </div>
+  </div>
+</div>

@@ -316,7 +316,7 @@ function FloatingSearchContent({
       ) : searchResults.length === 0 ? (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
-            {searchQuery ? "No results" : "Enter search query and press Enter"}
+            {searchQuery ? `No results found for "${searchQuery}"` : "Enter search query and press Enter"}
           </span>
         </div>
       ) : (

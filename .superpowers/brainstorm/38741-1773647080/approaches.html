@@ -1,0 +1,74 @@
+<h2>字符串提取：3 种技术方案</h2>
+<p class="subtitle">选择核心提取策略，影响性能、准确性和实现复杂度</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Phase2 集成扫描（推荐）</h3>
+      <p><strong>原理：</strong>在 phase2 构建内存索引时，同步维护一个字节级内存镜像 (HashMap&lt;u64, u8&gt;)。每次 WRITE 操作后，检查该区域是否形成/修改了可打印字符串。</p>
+      <p><strong>优点：</strong></p>
+      <ul>
+        <li>单次扫描，零额外 I/O</li>
+        <li>天然按时序记录字符串的出现和覆写</li>
+        <li>与 Phase2 的 bincode 缓存集成，二次加载秒开</li>
+      </ul>
+      <p><strong>缺点：</strong></p>
+      <ul>
+        <li>增加 Phase2 构建时间（约 5-10%）</li>
+        <li>内存镜像占用额外内存（通常 &lt;50MB）</li>
+      </ul>
+      <div class="pros-cons">
+        <div class="pros"><h4>性能</h4><p>⚡ 最优 — 无重复扫描</p></div>
+        <div class="cons"><h4>复杂度</h4><p>中等 — 需修改 phase2.rs</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Phase3 后处理</h3>
+      <p><strong>原理：</strong>Phase2 完成后，新增一个 Phase3 阶段。遍历 MemAccessIndex 的所有 WRITE 记录，按时序重建内存镜像并提取字符串。</p>
+      <p><strong>优点：</strong></p>
+      <ul>
+        <li>模块化好，不修改现有 phase2 代码</li>
+        <li>可独立缓存字符串索引</li>
+        <li>易于调试和测试</li>
+      </ul>
+      <p><strong>缺点：</strong></p>
+      <ul>
+        <li>需要额外遍历所有内存记录（重复工作）</li>
+        <li>MemAccessIndex 当前无公开迭代器，需暴露内部 HashMap</li>
+        <li>加载时间增加一个阶段</li>
+      </ul>
+      <div class="pros-cons">
+        <div class="pros"><h4>性能</h4><p>⚠️ 中等 — 额外一轮扫描</p></div>
+        <div class="cons"><h4>复杂度</h4><p>低 — 完全独立模块</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>按需懒加载</h3>
+      <p><strong>原理：</strong>用户打开字符串面板时，才实时扫描 MemAccessIndex 提取字符串。结果缓存在内存中。</p>
+      <p><strong>优点：</strong></p>
+      <ul>
+        <li>不影响文件加载速度</li>
+        <li>不用的功能零开销</li>
+      </ul>
+      <p><strong>缺点：</strong></p>
+      <ul>
+        <li>首次打开面板时有明显延迟（大 trace 可能数秒）</li>
+        <li>无法参与 bincode 缓存，每次重新打开文件都要重算</li>
+        <li>用户体验不佳 — 期望即时响应</li>
+      </ul>
+      <div class="pros-cons">
+        <div class="pros"><h4>性能</h4><p>❌ 差 — 每次需实时计算</p></div>
+        <div class="cons"><h4>复杂度</h4><p>低 — 完全独立</p></div>
+      </div>
+    </div>
+  </div>
+</div>

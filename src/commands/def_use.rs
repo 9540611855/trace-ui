@@ -41,7 +41,7 @@ pub fn get_reg_def_use_chain(
 
     let total = session.total_lines;
     let format = session.trace_format;
-    let line_index = session.line_index.as_ref().ok_or_else(|| "索引尚未构建完成".to_string())?;
+    let line_index = session.line_index_view().ok_or_else(|| "索引尚未构建完成".to_string())?;
 
     // === 分析 anchor 行：判断 target_reg 在当前行是 DEF 还是 USE ===
     let mut anchor_is_use = false;
